@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="VirtualStore.API/VirtualStore.API.csproj" />
+  <Project Path="VirtualStore.Application/VirtualStore.Application.csproj" />
+  <Project Path="VirtualStore.Domain/VirtualStore.Domain.csproj" />
+  <Project Path="VirtualStore.Infrastructure/VirtualStore.Infrastructure.csproj" />
+</Solution>
