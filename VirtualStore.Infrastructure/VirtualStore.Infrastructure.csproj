@@ -4,15 +4,20 @@
     <ProjectReference Include="..\VirtualStore.Application\VirtualStore.Application.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <PackageReference Include="MailKit" Version="4.16.0" />
-    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.7" />
-    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.7" />
-    <PackageReference Include="MongoDB.Driver" Version="3.8.0" />
-    <PackageReference Include="Quartz" Version="3.18.1" />
-    <PackageReference Include="Quartz.Extensions.Hosting" Version="3.18.1" />
-    <PackageReference Include="Stripe.net" Version="51.1.0" />
-  </ItemGroup>
+	<ItemGroup>
+		<!-- JWT/Identity packages aligned with the API's JwtBearer version -->
+		<PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.14.0" />
+		<PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.14.0" />
+
+		<!-- Core dependencies -->
+		<PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
+		<PackageReference Include="MailKit" Version="4.11.0" />
+		<PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.7" />
+		<PackageReference Include="MongoDB.Driver" Version="3.2.1" />
+		<PackageReference Include="Quartz" Version="3.13.1" />
+		<PackageReference Include="Quartz.Extensions.Hosting" Version="3.13.1" />
+		<PackageReference Include="Stripe.net" Version="47.2.0" />
+	</ItemGroup>
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
