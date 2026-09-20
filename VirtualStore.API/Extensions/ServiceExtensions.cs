@@ -280,9 +280,14 @@ public static class ServiceExtensions
                         AutoReplenishment = true
                     });
 
-            // "auth": strict per-IP budget for AuthController + StripeWebhookController
-            // (applied via [EnableRateLimiting("auth")] on those controllers).
+            // "auth": strict per-IP budget for AuthController
+            // (applied via [EnableRateLimiting("auth")] on that controller).
             options.AddPolicy("auth", httpContext => PerIpSlidingWindow(httpContext, permitLimit: 5));
+
+            // "webhook": per-IP budget for StripeWebhookController (ADR-0007).
+            // Stripe bursts redeliveries on failures; 60/min absorbs retry storms
+            // without throttling legitimate traffic. AuthController stays on "auth".
+            options.AddPolicy("webhook", httpContext => PerIpSlidingWindow(httpContext, permitLimit: 60));
 
             // Global fallback: sliding 100 req/min per IP for everything else.
             options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(

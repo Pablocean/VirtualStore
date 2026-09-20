@@ -33,7 +33,13 @@ public class AuthController : ControllerBase
     {
         var refreshToken = Request.Cookies["refreshToken"];
         if (string.IsNullOrEmpty(refreshToken))
-            return BadRequest(new { message = "Refresh token not provided" });
+            return BadRequest(new ProblemDetails
+            {
+                Status = StatusCodes.Status400BadRequest,
+                Title = "Bad Request",
+                Detail = "Refresh token not provided.",
+                Instance = HttpContext.Request.Path
+            });
 
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         var response = await _authService.RefreshTokenAsync(refreshToken, ipAddress);
@@ -47,7 +53,13 @@ public class AuthController : ControllerBase
     {
         var refreshToken = Request.Cookies["refreshToken"];
         if (string.IsNullOrEmpty(refreshToken))
-            return BadRequest(new { message = "Refresh token not provided" });
+            return BadRequest(new ProblemDetails
+            {
+                Status = StatusCodes.Status400BadRequest,
+                Title = "Bad Request",
+                Detail = "Refresh token not provided.",
+                Instance = HttpContext.Request.Path
+            });
 
         var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         await _authService.RevokeTokenAsync(refreshToken, ipAddress);

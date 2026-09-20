@@ -11,7 +11,7 @@ namespace VirtualStore.API.Controllers;
 /// <summary>Stripe webhook receiver. Verifies the signature and mirrors payment state into orders.</summary>
 [ApiController]
 [Route("api/stripe/webhook")]
-[EnableRateLimiting("auth")]
+[EnableRateLimiting("webhook")]
 public class StripeWebhookController : ControllerBase
 {
     private readonly IStripePaymentService _paymentService;
@@ -35,42 +35,70 @@ public class StripeWebhookController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> HandleWebhook(CancellationToken cancellationToken)
     {
-        string json;
-        using (var reader = new StreamReader(Request.Body))
-            json = await reader.ReadToEndAsync(cancellationToken);
-
-        var signature = Request.Headers["Stripe-Signature"].ToString();
-
-        StripeWebhookResultDto result;
         try
         {
-            result = await _paymentService.HandleWebhookEventAsync(json, signature, cancellationToken);
-        }
-        catch (StripeException ex)
-        {
-            _logger.LogWarning(ex, "Rejected Stripe webhook with invalid signature.");
-            return BadRequest(new { message = "Invalid webhook signature." });
-        }
+            string json;
+            using (var reader = new StreamReader(Request.Body))
+                json = await reader.ReadToEndAsync(cancellationToken);
 
-        // Mirror payment state into the linked order. Webhooks must answer 200 even when
-        // the order update cannot be applied, so failures are logged, not re-thrown.
-        try
-        {
-            if (result.Succeeded && result.OrderId is not null)
-            {
-                await _orderService.UpdateOrderStatusAsync(result.OrderId, OrderStatus.PaymentReceived, cancellationToken);
-            }
-            else if (!result.Succeeded && result.OrderId is not null &&
-                (result.EventType == "payment_intent.payment_failed" || result.EventType == "charge.refunded"))
-            {
-                await _orderService.UpdateOrderStatusAsync(result.OrderId, OrderStatus.Cancelled, cancellationToken);
-            }
-        }
-        catch (Exception ex) when (ex is KeyNotFoundException || ex is InvalidOperationException)
-        {
-            _logger.LogWarning(ex, "Stripe webhook {EventType} for order {OrderId} could not be applied.", result.EventType, result.OrderId);
-        }
+            var signature = Request.Headers["Stripe-Signature"].ToString();
 
-        return Ok(result);
+            StripeWebhookResultDto result;
+            try
+            {
+                result = await _paymentService.HandleWebhookEventAsync(json, signature, cancellationToken);
+            }
+            catch (StripeException ex)
+            {
+                _logger.LogWarning(ex, "Rejected Stripe webhook with invalid signature.");
+                return BadRequest(new ProblemDetails
+                {
+                    Status = StatusCodes.Status400BadRequest,
+                    Title = "Bad Request",
+                    Detail = "Invalid webhook signature.",
+                    Instance = HttpContext.Request.Path
+                });
+            }
+
+            // Duplicate deliveries (same Stripe event id) are acked without state change.
+            if (result.Duplicate)
+            {
+                _logger.LogInformation("Ignored duplicate Stripe webhook {EventType}.", result.EventType);
+                return Ok(result);
+            }
+
+            // Mirror payment state into the linked order. Webhooks must answer 200 even when
+            // the order update cannot be applied, so failures are logged, not re-thrown.
+            try
+            {
+                if (result.Succeeded && result.OrderId is not null)
+                {
+                    await _orderService.UpdateOrderStatusAsync(result.OrderId, OrderStatus.PaymentReceived, cancellationToken);
+                }
+                else if (!result.Succeeded && result.OrderId is not null &&
+                    (result.EventType == "payment_intent.payment_failed" || result.EventType == "charge.refunded"))
+                {
+                    await _orderService.UpdateOrderStatusAsync(result.OrderId, OrderStatus.Cancelled, cancellationToken);
+                }
+            }
+            catch (Exception ex) when (ex is KeyNotFoundException || ex is InvalidOperationException)
+            {
+                _logger.LogWarning(ex, "Stripe webhook {EventType} for order {OrderId} could not be applied.", result.EventType, result.OrderId);
+            }
+
+            return Ok(result);
+        }
+        catch (Exception ex)
+        {
+            // Catch-all: never let Stripe retry-storm on a 5xx. Log and ack with 200.
+            _logger.LogWarning(ex, "Stripe webhook handler failed unexpectedly; acked with 200 to stop retries.");
+            return Ok(new StripeWebhookResultDto
+            {
+                EventType = "unknown",
+                PaymentIntentId = null,
+                OrderId = null,
+                Succeeded = false
+            });
+        }
     }
 }

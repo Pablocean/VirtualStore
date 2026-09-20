@@ -1,4 +1,6 @@
 using AutoMapper;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Driver;
 using VirtualStore.Application.Common;
 using VirtualStore.Application.DTOs;
@@ -16,10 +18,12 @@ public class OrderService : IOrderService
         new Dictionary<OrderStatus, IReadOnlySet<OrderStatus>>
         {
             [OrderStatus.Pending] = new HashSet<OrderStatus> { OrderStatus.PaymentReceived, OrderStatus.Cancelled },
-            [OrderStatus.PaymentReceived] = new HashSet<OrderStatus> { OrderStatus.Processing, OrderStatus.Cancelled },
-            [OrderStatus.Processing] = new HashSet<OrderStatus> { OrderStatus.Shipped, OrderStatus.Cancelled },
-            [OrderStatus.Shipped] = new HashSet<OrderStatus> { OrderStatus.Delivered },
-            [OrderStatus.Delivered] = new HashSet<OrderStatus>(),
+            [OrderStatus.PaymentReceived] = new HashSet<OrderStatus> { OrderStatus.Processing, OrderStatus.Cancelled, OrderStatus.Refunded, OrderStatus.PartiallyRefunded },
+            [OrderStatus.Processing] = new HashSet<OrderStatus> { OrderStatus.Shipped, OrderStatus.Cancelled, OrderStatus.Refunded, OrderStatus.PartiallyRefunded },
+            [OrderStatus.Shipped] = new HashSet<OrderStatus> { OrderStatus.Delivered, OrderStatus.PartiallyRefunded },
+            [OrderStatus.Delivered] = new HashSet<OrderStatus> { OrderStatus.Refunded },
+            [OrderStatus.PartiallyRefunded] = new HashSet<OrderStatus> { OrderStatus.Refunded },
+            [OrderStatus.Refunded] = new HashSet<OrderStatus>(),
             [OrderStatus.Cancelled] = new HashSet<OrderStatus>()
         };
 
@@ -28,6 +32,8 @@ public class OrderService : IOrderService
     private readonly IRepository<Product> _productRepo;
     private readonly IMapper _mapper;
     private readonly MongoDbContext? _context;
+    private readonly IStripePaymentService? _paymentService;
+    private readonly ILogger<OrderService> _logger;
 
     /// <param name="context">
     /// Optional so existing unit-test constructions (<c>new OrderService(repos, mapper)</c>)
@@ -35,13 +41,28 @@ public class OrderService : IOrderService
     /// no session). DI always supplies the singleton context, so production checkout
     /// is transactional. See ADR-0006.
     /// </param>
-    public OrderService(IRepository<Order> orderRepo, IRepository<Cart> cartRepo, IRepository<Product> productRepo, IMapper mapper, MongoDbContext? context = null)
+    /// <param name="paymentService">
+    /// Optional Stripe linkage (ADR-0007). When present, a payment intent is created
+    /// AFTER the checkout transaction commits (never inside it) with the
+    /// deterministic key <c>order:{orderId}:intent</c> and persisted on the order.
+    /// Null in unit tests that do not cover payments — checkout then skips linkage.
+    /// </param>
+    public OrderService(
+        IRepository<Order> orderRepo,
+        IRepository<Cart> cartRepo,
+        IRepository<Product> productRepo,
+        IMapper mapper,
+        MongoDbContext? context = null,
+        IStripePaymentService? paymentService = null,
+        ILogger<OrderService>? logger = null)
     {
         _orderRepo = orderRepo;
         _cartRepo = cartRepo;
         _productRepo = productRepo;
         _mapper = mapper;
         _context = context;
+        _paymentService = paymentService;
+        _logger = logger ?? NullLogger<OrderService>.Instance;
     }
 
     public async Task<OrderDto> CreateOrderAsync(string userId, CreateOrderDto dto, CancellationToken cancellationToken = default)
@@ -57,17 +78,22 @@ public class OrderService : IOrderService
 
         var idempotencyKey = NormalizeKey(dto.IdempotencyKey);
 
+        OrderDto created;
         try
         {
             if (_context is null)
-                return await CreateOrderCoreAsync(userId, dto, idempotencyKey, cancellationToken).ConfigureAwait(false);
-
-            OrderDto? result = null;
-            await _context.TransactAsync(async () =>
             {
-                result = await CreateOrderCoreAsync(userId, dto, idempotencyKey, cancellationToken).ConfigureAwait(false);
-            }, cancellationToken).ConfigureAwait(false);
-            return result!;
+                created = await CreateOrderCoreAsync(userId, dto, idempotencyKey, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                OrderDto? result = null;
+                await _context.TransactAsync(async () =>
+                {
+                    result = await CreateOrderCoreAsync(userId, dto, idempotencyKey, cancellationToken).ConfigureAwait(false);
+                }, cancellationToken).ConfigureAwait(false);
+                created = result!;
+            }
         }
         catch (MongoWriteException ex) when (idempotencyKey is not null && IsDuplicateKey(ex))
         {
@@ -82,6 +108,39 @@ public class OrderService : IOrderService
         }
         // Transaction aborts for any other reason propagate as MongoException
         // (mapped to 500 by ApiExceptionHandler; see ADR-0006 follow-ups).
+
+        // Intent↔order linkage (ADR-0007): Stripe is called OUTSIDE the mongo
+        // transaction (network I/O must never enlist). On failure the order stays
+        // Pending with a null intent id; the client retries via
+        // POST /api/payments/intent { orderId }.
+        if (_paymentService is not null)
+        {
+            try
+            {
+                var intent = await _paymentService.CreatePaymentIntentAsync(
+                    created.TotalAmount,
+                    created.Currency,
+                    customerId: null,
+                    orderId: created.Id,
+                    idempotencyKey: StripeIdempotency.IntentKey(created.Id),
+                    cancellationToken).ConfigureAwait(false);
+
+                var entity = await _orderRepo.GetByIdAsync(created.Id, cancellationToken).ConfigureAwait(false);
+                if (entity is not null)
+                {
+                    entity.StripePaymentIntentId = intent.PaymentIntentId;
+                    await _orderRepo.UpdateAsync(entity.Id, entity, cancellationToken).ConfigureAwait(false);
+                    created.StripePaymentIntentId = intent.PaymentIntentId;
+                }
+            }
+            catch (Exception ex)
+            {
+                // Swallow: checkout already committed; linkage is retried explicitly.
+                _logger.LogWarning(ex, "Stripe intent creation failed for order {OrderId}; order stays Pending without intent id.", created.Id);
+            }
+        }
+
+        return created;
     }
 
     /// <summary>
@@ -188,6 +247,56 @@ public class OrderService : IOrderService
             throw new InvalidOperationException($"Cannot transition order from {order.Status} to {status}.");
 
         order.Status = status;
+        await _orderRepo.UpdateAsync(orderId, order, cancellationToken).ConfigureAwait(false);
+        return _mapper.Map<OrderDto>(order);
+    }
+
+    public async Task<OrderDto> AttachPaymentIntentAsync(string orderId, string paymentIntentId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(paymentIntentId))
+            throw new InvalidOperationException("Payment intent id must not be empty.");
+
+        var order = await _orderRepo.GetByIdAsync(orderId, cancellationToken).ConfigureAwait(false)
+            ?? throw new KeyNotFoundException("Order not found");
+
+        order.StripePaymentIntentId = paymentIntentId.Trim();
+        await _orderRepo.UpdateAsync(orderId, order, cancellationToken).ConfigureAwait(false);
+        return _mapper.Map<OrderDto>(order);
+    }
+
+    public async Task<OrderDto> ApplyRefundAsync(string orderId, string? refundId, decimal? refundAmount, bool fullRefund, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var order = await _orderRepo.GetByIdAsync(orderId, cancellationToken).ConfigureAwait(false)
+            ?? throw new KeyNotFoundException("Order not found");
+
+        var target = fullRefund ? OrderStatus.Refunded : OrderStatus.PartiallyRefunded;
+        if (!AllowedTransitions.TryGetValue(order.Status, out var allowed) || !allowed.Contains(target))
+            throw new InvalidOperationException($"Cannot transition order from {order.Status} to {target}.");
+
+        // Full refunds restore stock (goods come back); partial refunds do NOT —
+        // a partial is a discount/adjustment on kept goods, not a return (ADR-0007).
+        if (fullRefund)
+        {
+            foreach (var item in order.Items)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var product = await _productRepo.GetByIdAsync(item.ProductId, cancellationToken).ConfigureAwait(false);
+                if (product is null)
+                {
+                    _logger.LogWarning("Refund stock restore skipped: product {ProductId} of order {OrderId} no longer exists.", item.ProductId, orderId);
+                    continue;
+                }
+                product.StockQuantity += item.Quantity;
+                await _productRepo.UpdateAsync(product.Id, product, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        order.Status = target;
+        order.StripeRefundId = refundId;
+        order.StripeRefundAmount = refundAmount ?? (fullRefund ? order.TotalAmount : null);
         await _orderRepo.UpdateAsync(orderId, order, cancellationToken).ConfigureAwait(false);
         return _mapper.Map<OrderDto>(order);
     }

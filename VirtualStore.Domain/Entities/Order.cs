@@ -11,6 +11,16 @@ public class Order : BaseEntity
     public string Currency { get; set; } = "usd";
     public OrderStatus Status { get; set; } = OrderStatus.Pending;
     public string? StripePaymentIntentId { get; set; }
+    /// <summary>
+    /// Last Stripe refund id applied to this order (additive, Epic B / ADR-0007).
+    /// Null until a refund is processed via <c>POST /api/payments/orders/{id}/refund</c>.
+    /// </summary>
+    public string? StripeRefundId { get; set; }
+    /// <summary>
+    /// Amount of the last refund (minor-unit-exact decimal). Full refunds equal
+    /// <see cref="TotalAmount"/>; partial refunds are smaller. Null until refunded.
+    /// </summary>
+    public decimal? StripeRefundAmount { get; set; }
     public Address ShippingAddress { get; set; } = new();
     /// <summary>
     /// Client-supplied idempotency key (header <c>Idempotency-Key</c> wins over body).
