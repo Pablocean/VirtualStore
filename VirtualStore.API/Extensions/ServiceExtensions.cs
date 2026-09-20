@@ -131,6 +131,20 @@ public static class ServiceExtensions
         return services;
     }
 
+    /// <summary>
+    /// Dev-only: wires the JWT Bearer security scheme into the OpenAPI document
+    /// so Scalar shows the Authorize button. Only call in Development
+    /// (the OpenAPI/Scalar endpoints are mapped dev-only in Program.cs).
+    /// </summary>
+    public static IServiceCollection AddDevOpenApiJwtSecurity(this IServiceCollection services)
+    {
+        services.AddOpenApi(options =>
+        {
+            options.AddDocumentTransformer<OpenApi.BearerSecuritySchemeTransformer>();
+        });
+        return services;
+    }
+
     #region Wave 1b - Validation + ProblemDetails (parallel-wave merge zone: keep wave-1b additions inside this region)
     public static IServiceCollection AddWave1bValidationAndErrors(this IServiceCollection services)
     {
