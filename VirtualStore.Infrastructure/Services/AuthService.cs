@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
+using VirtualStore.Application.Common;
 using VirtualStore.Application.DTOs.Auth;
 using VirtualStore.Application.Interfaces;
 using VirtualStore.Domain.Entities;
@@ -15,6 +16,11 @@ public class AuthService : IAuthService
 {
     private const int MaxOtpAttempts = 5;
     private static readonly TimeSpan OtpLifetime = TimeSpan.FromMinutes(10);
+
+    private const int MaxFailedAccessAttempts = 5;
+    private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan EmailConfirmationLifetime = TimeSpan.FromHours(24);
+    private static readonly TimeSpan PasswordResetLifetime = TimeSpan.FromHours(1);
 
     private readonly IRepository<User> _userRepository;
     private readonly ITokenService _tokenService;
@@ -39,8 +45,30 @@ public class AuthService : IAuthService
     public async Task<TokenResponse> LoginAsync(LoginRequest request, string ipAddress)
     {
         var user = await _userRepository.FindOneAsync(u => u.Email == request.Email);
-        if (user == null || !VerifyPassword(request.Password, user.PasswordHash))
+        if (user == null)
             throw new UnauthorizedAccessException("Invalid credentials");
+
+        // Expired lockouts clear silently; active lockouts reject before password work.
+        if (user.LockoutEnd != null && user.LockoutEnd <= DateTime.UtcNow)
+        {
+            user.LockoutEnd = null;
+            user.FailedAccessCount = 0;
+        }
+
+        if (user.LockoutEnd != null && user.LockoutEnd > DateTime.UtcNow)
+            throw new AccountLockedException("Account is locked due to too many failed login attempts.");
+
+        if (!VerifyPassword(request.Password, user.PasswordHash))
+        {
+            user.FailedAccessCount++;
+            if (user.FailedAccessCount >= MaxFailedAccessAttempts)
+                user.LockoutEnd = DateTime.UtcNow.Add(LockoutDuration);
+            await _userRepository.UpdateAsync(user.Id, user);
+            throw new UnauthorizedAccessException("Invalid credentials");
+        }
+
+        if (!user.EmailConfirmed)
+            throw new EmailNotConfirmedException("Email address is not confirmed.");
 
         // Two-factor logic (OTP cache keys normalized by lowercase email)
         if (user.TwoFactorEnabled && string.IsNullOrEmpty(request.OtpCode))
@@ -72,6 +100,8 @@ public class AuthService : IAuthService
         };
         user.RefreshTokens.Add(refreshTokenEntity);
         user.LastLoginAt = DateTime.UtcNow;
+        user.FailedAccessCount = 0;
+        user.LockoutEnd = null;
         await _userRepository.UpdateAsync(user.Id, user);
 
         return new TokenResponse
@@ -143,14 +173,114 @@ public class AuthService : IAuthService
         await _userRepository.UpdateAsync(user.Id, user);
     }
 
+    public async Task ConfirmEmailAsync(ConfirmEmailDto request)
+    {
+        var user = await _userRepository.FindOneAsync(u => u.Email == request.Email);
+        if (user == null)
+            throw new InvalidOperationException("Invalid or expired confirmation token.");
+
+        var cachedToken = await _cache.GetStringAsync(EmailConfirmationCacheKey(user.Id));
+        if (cachedToken == null || !FixedTimeEqual(cachedToken, request.Token))
+            throw new InvalidOperationException("Invalid or expired confirmation token.");
+
+        user.EmailConfirmed = true;
+        await _userRepository.UpdateAsync(user.Id, user);
+        await _cache.RemoveAsync(EmailConfirmationCacheKey(user.Id));
+    }
+
+    public async Task ResendConfirmationAsync(ResendConfirmationDto request)
+    {
+        // Always succeeds silently: no enumeration of registered or confirmed emails.
+        var user = await _userRepository.FindOneAsync(u => u.Email == request.Email);
+        if (user == null || user.EmailConfirmed)
+            return;
+
+        var token = GenerateSecureToken();
+        await _cache.SetStringAsync(
+            EmailConfirmationCacheKey(user.Id),
+            token,
+            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = EmailConfirmationLifetime });
+        await _emailService.SendConfirmationEmailAsync(user.Email, token);
+    }
+
+    public async Task ChangePasswordAsync(string userId, ChangePasswordDto request, string ipAddress)
+    {
+        var user = await _userRepository.GetByIdAsync(userId)
+            ?? throw new KeyNotFoundException("User not found.");
+
+        if (!VerifyPassword(request.CurrentPassword, user.PasswordHash))
+            throw new UnauthorizedAccessException("Current password is incorrect.");
+
+        PasswordPolicy.EnsureValid(request.NewPassword);
+
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+        RevokeAllRefreshTokens(user, ipAddress);
+        await _userRepository.UpdateAsync(user.Id, user);
+    }
+
+    public async Task ForgotPasswordAsync(ForgotPasswordDto request)
+    {
+        // Always succeeds silently: no enumeration of registered emails.
+        var user = await _userRepository.FindOneAsync(u => u.Email == request.Email);
+        if (user == null)
+            return;
+
+        var token = GenerateSecureToken();
+        await _cache.SetStringAsync(
+            PasswordResetCacheKey(user.Email),
+            token,
+            new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = PasswordResetLifetime });
+        await _emailService.SendPasswordResetEmailAsync(user.Email, token);
+    }
+
+    public async Task ResetPasswordAsync(ResetPasswordDto request, string ipAddress)
+    {
+        var user = await _userRepository.FindOneAsync(u => u.Email == request.Email);
+        var cachedToken = user != null
+            ? await _cache.GetStringAsync(PasswordResetCacheKey(user.Email))
+            : null;
+
+        if (user == null || cachedToken == null || !FixedTimeEqual(cachedToken, request.Token))
+            throw new InvalidOperationException("Invalid or expired password reset token.");
+
+        PasswordPolicy.EnsureValid(request.NewPassword);
+
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+        RevokeAllRefreshTokens(user, ipAddress);
+        await _userRepository.UpdateAsync(user.Id, user);
+        await _cache.RemoveAsync(PasswordResetCacheKey(user.Email));
+    }
+
     private static string GenerateOtp() => RandomNumberGenerator.GetInt32(100000, 999999).ToString();
+
+    private static string GenerateSecureToken() =>
+        Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
 
     private static bool VerifyPassword(string password, string hash)
         => BCrypt.Net.BCrypt.Verify(password, hash);
 
+    private static bool FixedTimeEqual(string a, string b) =>
+        a.Length == b.Length && CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(a),
+            Encoding.UTF8.GetBytes(b));
+
+    private static void RevokeAllRefreshTokens(User user, string ipAddress)
+    {
+        var now = DateTime.UtcNow;
+        foreach (var rt in user.RefreshTokens.Where(rt => rt.Revoked == null))
+        {
+            rt.Revoked = now;
+            rt.RevokedByIp = ipAddress;
+        }
+    }
+
     private static string OtpCacheKey(string email) => $"otp_{email.ToLowerInvariant()}";
 
     private static string OtpAttemptCacheKey(string email) => $"otp_attempts_{email.ToLowerInvariant()}";
+
+    private static string EmailConfirmationCacheKey(string userId) => $"emailconfirm_{userId.ToLowerInvariant()}";
+
+    private static string PasswordResetCacheKey(string email) => $"pwdreset_{email.ToLowerInvariant()}";
 
     private async Task ValidateOtpOrThrowAsync(string email, string providedOtp)
     {

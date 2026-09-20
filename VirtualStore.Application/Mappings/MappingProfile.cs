@@ -19,6 +19,8 @@ public class MappingProfile : Profile
             .ForMember(dest => dest.UpdatedAt, opt => opt.Ignore())
             .ForMember(dest => dest.IsDeleted, opt => opt.Ignore())
             .ForMember(dest => dest.EmailConfirmed, opt => opt.Ignore())
+            .ForMember(dest => dest.FailedAccessCount, opt => opt.Ignore())
+            .ForMember(dest => dest.LockoutEnd, opt => opt.Ignore())
             .ForMember(dest => dest.TwoFactorEnabled, opt => opt.Ignore())
             .ForMember(dest => dest.TwoFactorSecret, opt => opt.Ignore())
             .ForMember(dest => dest.LastLoginAt, opt => opt.Ignore())
@@ -34,6 +36,8 @@ public class MappingProfile : Profile
         updateUserMap.ForMember(dest => dest.UpdatedAt, opt => opt.Ignore());
         updateUserMap.ForMember(dest => dest.IsDeleted, opt => opt.Ignore());
         updateUserMap.ForMember(dest => dest.TwoFactorSecret, opt => opt.Ignore());
+        updateUserMap.ForMember(dest => dest.FailedAccessCount, opt => opt.Ignore());
+        updateUserMap.ForMember(dest => dest.LockoutEnd, opt => opt.Ignore());
         updateUserMap.ForMember(dest => dest.LastLoginAt, opt => opt.Ignore());
         updateUserMap.ForMember(dest => dest.RefreshTokens, opt => opt.Ignore());
 

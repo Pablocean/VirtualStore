@@ -12,6 +12,8 @@ public class User : BaseEntity
     public string? PhoneNumber { get; set; }
     public List<UserRole> Roles { get; set; } = new();
     public bool EmailConfirmed { get; set; }
+    public int FailedAccessCount { get; set; }
+    public DateTime? LockoutEnd { get; set; }
     public bool TwoFactorEnabled { get; set; }
     public string? TwoFactorSecret { get; set; }
     public DateTime? LastLoginAt { get; set; }

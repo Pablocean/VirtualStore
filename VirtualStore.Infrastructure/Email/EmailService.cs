@@ -60,4 +60,26 @@ public class EmailService : IEmailService
             <p>This code will expire in 10 minutes.</p>";
         await SendEmailAsync(to, subject, body);
     }
+
+    public async Task SendConfirmationEmailAsync(string to, string token)
+    {
+        var subject = "Confirm your email";
+        var body = $@"
+            <h2>Virtual Store Email Confirmation</h2>
+            <p>Use the following token to confirm your email address:</p>
+            <p><strong>{token}</strong></p>
+            <p>This token will expire in 24 hours. If you did not request this, ignore this email.</p>";
+        await SendEmailAsync(to, subject, body);
+    }
+
+    public async Task SendPasswordResetEmailAsync(string to, string token)
+    {
+        var subject = "Password reset request";
+        var body = $@"
+            <h2>Virtual Store Password Reset</h2>
+            <p>Use the following token to reset your password:</p>
+            <p><strong>{token}</strong></p>
+            <p>This token will expire in 1 hour. If you did not request this, ignore this email.</p>";
+        await SendEmailAsync(to, subject, body);
+    }
 }
