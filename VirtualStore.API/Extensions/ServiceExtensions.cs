@@ -76,6 +76,7 @@ public static class ServiceExtensions
 
         // Caching
         services.AddMemoryCache();
+        AddWave3aFHybridCache(services, config);
 
         //Seeder
         services.AddScoped<DatabaseSeeder>();
@@ -177,6 +178,30 @@ public static class ServiceExtensions
             if (string.IsNullOrWhiteSpace(email?.Password))
                 Console.WriteLine("WARNING: EmailSettings:Password (env EmailSettings__Password) is empty — OTP email will fail until configured.");
         }
+    }
+    #endregion
+
+    #region Wave 3a-F - HybridCache + distributed OTP storage (Epic F-lite, ADR-0011)
+    // HybridCache (memory L1 by default) + optional Redis L2. IDistributedCache always
+    // resolves: in-memory when Redis:ConnectionString is empty (single-instance default),
+    // StackExchangeRedis when set (multi-instance OTP + shared L2). Called from
+    // AddApplicationServices above; keep all wave/3a-hybridcache2 additions in this region.
+    private static void AddWave3aFHybridCache(IServiceCollection services, IConfiguration config)
+    {
+        services.AddDistributedMemoryCache();
+
+        var redisConnectionString = config["Redis:ConnectionString"];
+        if (!string.IsNullOrWhiteSpace(redisConnectionString))
+        {
+            // Last IDistributedCache registration wins: Redis becomes both the
+            // distributed OTP store and the HybridCache L2.
+            services.AddStackExchangeRedisCache(options =>
+            {
+                options.Configuration = redisConnectionString;
+            });
+        }
+
+        services.AddHybridCache();
     }
     #endregion
 
