@@ -90,3 +90,8 @@ catch (Exception ex)
         Console.WriteLine("INNER: " + ex.InnerException.GetType().Name + ": " + ex.InnerException.Message);
     try { Console.WriteLine(ex.ToString()); } catch { Console.WriteLine("(Full exception string could not be printed)"); }
 }
+
+// Test entry point: enables WebApplicationFactory<Program> in VirtualStore.IntegrationTests.
+public partial class Program
+{
+}

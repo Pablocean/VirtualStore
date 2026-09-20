@@ -13,6 +13,19 @@ env:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MongoDbSettings__ConnectionString: mongodb://localhost:27017
+      MongoDbSettings__DatabaseName: VirtualStoreDb
     steps:
       - uses: actions/checkout@v4
 
@@ -27,5 +40,8 @@ jobs:
       - name: Build
         run: dotnet build VirtualStore.slnx -c Release --no-restore
 
-      - name: Test
-        run: dotnet test VirtualStore.slnx -c Release --no-build --verbosity normal
+      - name: Test (unit gate, no Docker required)
+        run: dotnet test VirtualStore.slnx -c Release --no-build --verbosity normal --filter Category!=Integration
+
+      - name: Test (full suite with coverage)
+        run: dotnet test VirtualStore.slnx -c Release --no-build --verbosity normal --collect:"XPlat Code Coverage"
