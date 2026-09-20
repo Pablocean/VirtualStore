@@ -22,15 +22,22 @@ public class DatabaseSeeder
 
     public async Task SeedAsync()
     {
-        var adminEmail = _configuration["DatabaseSeeder:AdminEmail"] ?? "admin@virtualstore.com";
-        var adminPassword = _configuration["DatabaseSeeder:AdminPassword"] ?? "Admin123!";
-        var adminUsername = _configuration["DatabaseSeeder:AdminUsername"] ?? "admin";
+        var configuredEmail = _configuration["DatabaseSeeder:AdminEmail"];
+        var configuredPassword = _configuration["DatabaseSeeder:AdminPassword"];
+        var configuredUsername = _configuration["DatabaseSeeder:AdminUsername"];
+
+        var usingDefaults = string.IsNullOrWhiteSpace(configuredEmail)
+            || string.IsNullOrWhiteSpace(configuredPassword)
+            || string.IsNullOrWhiteSpace(configuredUsername);
+
+        var adminEmail = configuredEmail ?? "admin@virtualstore.com";
+        var adminPassword = configuredPassword ?? "Admin123!";
+        var adminUsername = configuredUsername ?? "admin";
 
         // Check if any admin already exists (by email or role)
         var existingAdmin = await _userRepository.FindOneAsync(u => u.Email == adminEmail);
         if (existingAdmin != null && existingAdmin.Roles.Contains(UserRole.Admin))
         {
-            _logger.LogInformation("Admin user ({Email}) already exists. Skipping seed.", adminEmail);
             return;
         }
 
@@ -47,6 +54,10 @@ public class DatabaseSeeder
         };
 
         await _userRepository.AddAsync(admin);
-        _logger.LogInformation("Default admin user created: {Email} / {Password}", adminEmail, adminPassword);
+
+        if (usingDefaults)
+            _logger.LogWarning("Default admin credentials are in use. Admin user created: {Email} / {Username}", adminEmail, adminUsername);
+        else
+            _logger.LogInformation("Admin user created: {Email} / {Username}", adminEmail, adminUsername);
     }
 }
