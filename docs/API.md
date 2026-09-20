@@ -76,7 +76,7 @@ Success bodies are the DTO named per route. Failures use RFC 7807 `ProblemDetail
 | POST | `/api/orders` | Auth | `CreateOrderDto{items[{productId, quantity}], shippingAddress{street, city, state, zipCode, country}, stripePaymentMethodId?}` — client prices ignored | `201 OrderDto` (server-priced `totalAmount`, status `Pending`, stock decremented, cart cleared). `400/409` bad items/state. `404` unknown product |
 | GET | `/api/orders/my?pageNumber=1&pageSize=20` | Auth | — | `200 PagedResult<OrderDto>` (own orders, newest first) |
 | GET | `/api/orders/{id}` | Auth | — | `200 OrderDto` (owner or Admin). `403` otherwise. `404` |
-| PATCH | `/api/orders/{id}/status` | Admin | `UpdateOrderStatusDto{status}` (`Pending\|PaymentReceived\|Processing\|Shipped\|Delivered\|Cancelled`) | `200 OrderDto`. `409` illegal transition. `404` |
+| PATCH | `/api/orders/{id}/status` | Admin | `UpdateOrderStatusDto{status}` (`Pending\|PaymentReceived\|Processing\|Shipped\|Delivered\|Cancelled\|Refunded\|PartiallyRefunded`) | `200 OrderDto`. `409` illegal transition. `404` |
 
 ## Enterprise info — `api/enterprise-info`
 
@@ -89,14 +89,14 @@ Success bodies are the DTO named per route. Failures use RFC 7807 `ProblemDetail
 
 | Method | Path | Auth | Body | Responses |
 |---|---|---|---|---|
-| POST | `/api/payments/intent` | Auth | `CreatePaymentIntentDto{amount, currency="usd", customerId?, orderId?}` | `200 PaymentIntentResultDto{paymentIntentId, clientSecret, amount, currency, status}` (`orderId` stored in Stripe metadata). `400` |
-| POST | `/api/payments/orders/{id}/refund` | Admin | `RefundPaymentDto{amount?}` (optional; omitted = full refund) | `200 PaymentIntentResultDto` (refund). `404` unknown order. `400` order has no payment intent |
+| POST | `/api/payments/intent` | Auth | `CreatePaymentIntentDto{amount, currency="usd", customerId?, orderId?}` | `200 PaymentIntentResultDto{paymentIntentId, clientSecret, amount, currency, status, refundId?}` (`orderId` stored in Stripe metadata; when supplied the intent uses the deterministic key `order:{orderId}:intent` and the intent id is persisted on the order — retry path for checkouts whose post-commit linkage failed). `400`. `404` unknown `orderId` |
+| POST | `/api/payments/orders/{id}/refund` | Admin | `RefundPaymentDto{amount?}` (optional; omitted = full refund) | `200 PaymentIntentResultDto` (refund, incl. `refundId`). Full refund → order `Refunded` + stock restored + `stripeRefundId/Amount` persisted; partial → `PartiallyRefunded`, no stock restore (partial = discount/adjustment, not a return). Idempotency key `order:{id}:refund:{amount ?? "full"}`. `404` unknown order. `400` (ProblemDetails) order has no payment intent. `409` illegal refund transition |
 
 ## Stripe webhook — `api/stripe/webhook`
 
 | Method | Path | Auth | Body | Responses |
 |---|---|---|---|---|
-| POST | `/api/stripe/webhook` | Anonymous (**`Stripe-Signature` header**) | raw Stripe JSON | `200 StripeWebhookResultDto{eventType, paymentIntentId?, orderId?, succeeded}`. `400` bad signature. Mapping: `payment_intent.succeeded` → `PaymentReceived`; `payment_intent.payment_failed`/`charge.refunded` → `Cancelled`; unknown types acked without state change. Webhook **always answers 200** on valid signature even if the order update fails |
+| POST | `/api/stripe/webhook` | Anonymous (**`Stripe-Signature` header**) | raw Stripe JSON | `200 StripeWebhookResultDto{eventType, paymentIntentId?, orderId?, succeeded, duplicate}`. `400` (ProblemDetails) bad signature. Mapping: `payment_intent.succeeded` → `PaymentReceived`; `payment_intent.payment_failed`/`charge.refunded` → `Cancelled`; unknown types acked without state change. Duplicate Stripe event ids are acked with `duplicate: true` and no state change (30-day dedup window). Webhook **always answers 200** on valid signature even if the order update fails or the handler throws |
 
 ## Categories — `api/categories`
 

@@ -115,5 +115,16 @@ public class MongoDbContext
             Builders<Category>.IndexKeys.Ascending(c => c.ParentCategoryId),
             new CreateIndexOptions { Name = "ix_category_parentCategoryId" });
         await categoryCollection.Indexes.CreateOneAsync(categoryParentIndex, cancellationToken: ct);
+
+        // Webhook dedup (ADR-0007): one record per Stripe event id + 30-day TTL.
+        var webhookCollection = GetCollection<ProcessedWebhookEvent>(typeof(ProcessedWebhookEvent).Name);
+        var webhookEventIndex = new CreateIndexModel<ProcessedWebhookEvent>(
+            Builders<ProcessedWebhookEvent>.IndexKeys.Ascending(e => e.EventId),
+            new CreateIndexOptions { Unique = true, Name = "ux_webhookevent_eventId" });
+        await webhookCollection.Indexes.CreateOneAsync(webhookEventIndex, cancellationToken: ct);
+        var webhookTtlIndex = new CreateIndexModel<ProcessedWebhookEvent>(
+            Builders<ProcessedWebhookEvent>.IndexKeys.Ascending(e => e.ReceivedAt),
+            new CreateIndexOptions { ExpireAfter = TimeSpan.FromDays(30), Name = "ttl_webhookevent_receivedAt" });
+        await webhookCollection.Indexes.CreateOneAsync(webhookTtlIndex, cancellationToken: ct);
     }
 }

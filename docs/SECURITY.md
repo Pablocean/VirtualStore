@@ -29,8 +29,11 @@
 
 ## Webhook signature
 
-- `POST /api/stripe/webhook` is anonymous by design; authentication = `Stripe-Signature` header verified by `EventUtility.ConstructEvent(json, signature, WebhookSecret)` — throws `StripeException` → `400` on mismatch. Never bypass verification for "testing".
+- `POST /api/stripe/webhook` is anonymous by design; authentication = `Stripe-Signature` header verified by `EventUtility.ConstructEvent(json, signature, WebhookSecret)` — throws `StripeException` → `400 ProblemDetails` on mismatch. Never bypass verification for "testing".
 - `orderId` is bound via Stripe PaymentIntent **metadata** (attacker-controlled metadata can't escalate: unknown ids only produce logged no-ops with `200`).
+- **Dedup (ADR-0007):** each Stripe event id is recorded once (`ProcessedWebhookEvent`, unique `ux_webhookevent_eventId`, 30-day TTL). Redeliveries return `duplicate: true` with 200 and apply no state change.
+- **No retry storms:** the handler wraps its body in a catch-all — unexpected failures log a warning and still answer 200. Only signature failures return 400.
+- **Rate limiting:** the webhook sits on its own `webhook` policy (60 req/min per IP sliding window); auth endpoints stay on the stricter `auth` policy (5/min).
 
 ## Secrets & admin bootstrap
 

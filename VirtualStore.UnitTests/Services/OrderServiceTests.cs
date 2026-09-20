@@ -60,7 +60,7 @@ public class OrderServiceTests
             .Callback((Order o, CancellationToken _) => added.Add(o))
             .Returns(Task.CompletedTask);
 
-        var service = new OrderService(orders.Object, carts.Object, productRepo.Object, RealMapper());
+        var service = new OrderService(orders.Object, carts.Object, productRepo.Object, RealMapper(), context: null, paymentService: null);
         return new Harness(service, orders, carts, productRepo, added);
     }
 

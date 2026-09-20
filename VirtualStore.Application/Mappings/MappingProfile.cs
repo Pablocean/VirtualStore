@@ -88,6 +88,8 @@ public class MappingProfile : Profile
             .ForMember(dest => dest.Currency, opt => opt.Ignore())
             .ForMember(dest => dest.Status, opt => opt.Ignore())
             .ForMember(dest => dest.StripePaymentIntentId, opt => opt.Ignore())
+            .ForMember(dest => dest.StripeRefundId, opt => opt.Ignore())
+            .ForMember(dest => dest.StripeRefundAmount, opt => opt.Ignore())
             .ForMember(dest => dest.Id, opt => opt.Ignore())
             .ForMember(dest => dest.CreatedAt, opt => opt.Ignore())
             .ForMember(dest => dest.UpdatedAt, opt => opt.Ignore())

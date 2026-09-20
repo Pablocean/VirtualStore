@@ -11,6 +11,10 @@ public class OrderDto
     public string Currency { get; set; } = "usd";
     public OrderStatus Status { get; set; }
     public string? StripePaymentIntentId { get; set; }
+    /// <summary>Last Stripe refund id (ADR-0007). Null until refunded.</summary>
+    public string? StripeRefundId { get; set; }
+    /// <summary>Amount of the last refund. Null until refunded.</summary>
+    public decimal? StripeRefundAmount { get; set; }
     public AddressDto ShippingAddress { get; set; } = new();
     public DateTime CreatedAt { get; set; }
 }

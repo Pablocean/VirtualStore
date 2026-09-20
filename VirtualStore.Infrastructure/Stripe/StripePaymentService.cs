@@ -1,9 +1,14 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using MongoDB.Driver;
 using Polly;
 using Polly.Retry;
 using Stripe;
 using VirtualStore.Application.DTOs;
 using VirtualStore.Application.Interfaces;
+using VirtualStore.Domain.Entities;
+using VirtualStore.Domain.Interfaces;
 using VirtualStore.Domain.Settings;
 
 namespace VirtualStore.Infrastructure.Stripe;
@@ -11,6 +16,8 @@ namespace VirtualStore.Infrastructure.Stripe;
 public class StripePaymentService : IStripePaymentService
 {
     private readonly StripeSettings _settings;
+    private readonly IRepository<ProcessedWebhookEvent>? _webhookEvents;
+    private readonly ILogger<StripePaymentService> _logger;
 
     // Static pipeline (Stripe SDK is used directly, no IHttpClient): retry 2x on transient
     // Stripe errors (network failure, 408/429/5xx) + 10s per-attempt timeout. Signature
@@ -35,15 +42,30 @@ public class StripePaymentService : IStripePaymentService
         || ex.HttpStatusCode == (System.Net.HttpStatusCode)429
         || (int)ex.HttpStatusCode >= 500;
 
-    public StripePaymentService(IOptions<StripeSettings> options)
+    /// <param name="webhookEvents">
+    /// Optional so existing constructions keep compiling: without it webhook dedup
+    /// is skipped (unit tests). DI always supplies the scoped repository, so
+    /// production webhooks are deduplicated. See ADR-0007.
+    /// </param>
+    public StripePaymentService(
+        IOptions<StripeSettings> options,
+        IRepository<ProcessedWebhookEvent>? webhookEvents = null,
+        ILogger<StripePaymentService>? logger = null)
     {
         _settings = options?.Value ?? throw new ArgumentNullException(nameof(options));
+        _webhookEvents = webhookEvents;
+        _logger = logger ?? NullLogger<StripePaymentService>.Instance;
     }
 
     private StripeClient CreateClient() => new(_settings.SecretKey);
 
     private static long ToMinorUnits(decimal amount)
         => (long)Math.Round(amount * 100m, MidpointRounding.AwayFromZero);
+
+    private static RequestOptions? ToRequestOptions(string? idempotencyKey) =>
+        string.IsNullOrWhiteSpace(idempotencyKey)
+            ? null
+            : new RequestOptions { IdempotencyKey = idempotencyKey.Trim() };
 
     private static PaymentIntentResultDto ToResult(PaymentIntent intent) => new()
     {
@@ -54,7 +76,7 @@ public class StripePaymentService : IStripePaymentService
         Status = intent.Status
     };
 
-    public async Task<PaymentIntentResultDto> CreatePaymentIntentAsync(decimal amount, string currency, string? customerId = null, string? orderId = null, CancellationToken cancellationToken = default)
+    public async Task<PaymentIntentResultDto> CreatePaymentIntentAsync(decimal amount, string currency, string? customerId = null, string? orderId = null, string? idempotencyKey = null, CancellationToken cancellationToken = default)
     {
         var options = new PaymentIntentCreateOptions
         {
@@ -68,7 +90,7 @@ public class StripePaymentService : IStripePaymentService
         };
         var service = new PaymentIntentService(CreateClient());
         var intent = await _stripePipeline.ExecuteAsync(
-            async ct => await service.CreateAsync(options, cancellationToken: ct),
+            async ct => await service.CreateAsync(options, ToRequestOptions(idempotencyKey), cancellationToken: ct),
             cancellationToken);
         return ToResult(intent);
     }
@@ -82,7 +104,7 @@ public class StripePaymentService : IStripePaymentService
         return paymentIntent.Status == "succeeded";
     }
 
-    public async Task<PaymentIntentResultDto> RefundPaymentAsync(string paymentIntentId, decimal? amount = null, CancellationToken cancellationToken = default)
+    public async Task<PaymentIntentResultDto> RefundPaymentAsync(string paymentIntentId, decimal? amount = null, string? idempotencyKey = null, CancellationToken cancellationToken = default)
     {
         var options = new RefundCreateOptions
         {
@@ -93,7 +115,7 @@ public class StripePaymentService : IStripePaymentService
 
         var service = new RefundService(CreateClient());
         var refund = await _stripePipeline.ExecuteAsync(
-            async ct => await service.CreateAsync(options, cancellationToken: ct),
+            async ct => await service.CreateAsync(options, ToRequestOptions(idempotencyKey), cancellationToken: ct),
             cancellationToken);
         return new PaymentIntentResultDto
         {
@@ -101,16 +123,56 @@ public class StripePaymentService : IStripePaymentService
             ClientSecret = string.Empty,
             Amount = refund.Amount / 100m,
             Currency = refund.Currency,
-            Status = refund.Status
+            Status = refund.Status,
+            RefundId = refund.Id
         };
     }
 
-    public Task<StripeWebhookResultDto> HandleWebhookEventAsync(string json, string signatureHeader, CancellationToken cancellationToken = default)
+    public async Task<StripeWebhookResultDto> HandleWebhookEventAsync(string json, string signatureHeader, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         // Throws StripeException when the signature is invalid; the controller maps it to 400.
         var stripeEvent = EventUtility.ConstructEvent(json, signatureHeader, _settings.WebhookSecret);
+
+        // Check-then-insert dedup (ADR-0007): redeliveries share the Stripe event id.
+        // Duplicate → ignored result (controller acks 200, applies no state change).
+        if (_webhookEvents is not null && !string.IsNullOrWhiteSpace(stripeEvent.Id))
+        {
+            var seen = await _webhookEvents.FindOneAsync(e => e.EventId == stripeEvent.Id, cancellationToken).ConfigureAwait(false);
+            if (seen is not null)
+                return new StripeWebhookResultDto
+                {
+                    EventType = stripeEvent.Type,
+                    PaymentIntentId = null,
+                    OrderId = null,
+                    Succeeded = false,
+                    Duplicate = true
+                };
+
+            try
+            {
+                await _webhookEvents.AddAsync(new ProcessedWebhookEvent
+                {
+                    EventId = stripeEvent.Id,
+                    Type = stripeEvent.Type,
+                    ReceivedAt = DateTime.UtcNow
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            catch (MongoException ex)
+            {
+                // Lost the check-then-insert race: a concurrent delivery won.
+                _logger.LogDebug(ex, "Stripe webhook {EventId} already processed by a concurrent delivery.", stripeEvent.Id);
+                return new StripeWebhookResultDto
+                {
+                    EventType = stripeEvent.Type,
+                    PaymentIntentId = null,
+                    OrderId = null,
+                    Succeeded = false,
+                    Duplicate = true
+                };
+            }
+        }
 
         StripeWebhookResultDto result = stripeEvent.Type switch
         {
@@ -144,6 +206,6 @@ public class StripePaymentService : IStripePaymentService
             }
         };
 
-        return Task.FromResult(result);
+        return result;
     }
 }

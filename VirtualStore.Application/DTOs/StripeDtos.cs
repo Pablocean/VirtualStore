@@ -8,6 +8,11 @@ public class PaymentIntentResultDto
     public decimal Amount { get; set; }
     public string Currency { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+    /// <summary>
+    /// Stripe refund id (<c>re_…</c>) when this result represents a refund
+    /// (ADR-0007). Null for payment-intent creations.
+    /// </summary>
+    public string? RefundId { get; set; }
 }
 
 /// <summary>Normalized result of a Stripe webhook event (no Stripe SDK types leak).</summary>
@@ -17,6 +22,11 @@ public class StripeWebhookResultDto
     public string? PaymentIntentId { get; set; }
     public string? OrderId { get; set; }
     public bool Succeeded { get; set; }
+    /// <summary>
+    /// True when this delivery duplicates an already-processed Stripe event id
+    /// (ADR-0007). Duplicates are acked with 200 and apply no state change.
+    /// </summary>
+    public bool Duplicate { get; set; }
 }
 
 /// <summary>Payload for creating a Stripe payment intent.</summary>

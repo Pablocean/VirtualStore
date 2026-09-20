@@ -121,7 +121,7 @@ public class OrderIdempotencyTests
         carts.Setup(r => r.FindOneAsync(It.IsAny<Expression<Func<Cart, bool>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(cart);
 
-        var service = new OrderService(orders.Object, carts.Object, productRepo.Object, RealMapper());
+        var service = new OrderService(orders.Object, carts.Object, productRepo.Object, RealMapper(), context: null, paymentService: null);
         return new Harness(service, store, orders);
     }
 

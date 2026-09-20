@@ -4,6 +4,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using VirtualStore.Application.DTOs;
+using VirtualStore.Application.Interfaces;
 using VirtualStore.Application.Mappings;
 using VirtualStore.Domain.Entities;
 using VirtualStore.Domain.Enums;
@@ -27,7 +28,9 @@ public class OrderStatusTransitionTests
             .ReturnsAsync(order);
         var cartRepo = new Mock<IRepository<Cart>>();
         var productRepo = new Mock<IRepository<Product>>();
-        return new OrderService(orderRepoMock.Object, cartRepo.Object, productRepo.Object, RealMapper());
+        return new OrderService(
+            orderRepoMock.Object, cartRepo.Object, productRepo.Object, RealMapper(),
+            context: null, paymentService: Mock.Of<IStripePaymentService>());
     }
 
     public static TheoryData<OrderStatus, OrderStatus> LegalTransitions => new()
@@ -36,9 +39,16 @@ public class OrderStatusTransitionTests
         { OrderStatus.Pending, OrderStatus.Cancelled },
         { OrderStatus.PaymentReceived, OrderStatus.Processing },
         { OrderStatus.PaymentReceived, OrderStatus.Cancelled },
+        { OrderStatus.PaymentReceived, OrderStatus.Refunded },
+        { OrderStatus.PaymentReceived, OrderStatus.PartiallyRefunded },
         { OrderStatus.Processing, OrderStatus.Shipped },
         { OrderStatus.Processing, OrderStatus.Cancelled },
+        { OrderStatus.Processing, OrderStatus.Refunded },
+        { OrderStatus.Processing, OrderStatus.PartiallyRefunded },
         { OrderStatus.Shipped, OrderStatus.Delivered },
+        { OrderStatus.Shipped, OrderStatus.PartiallyRefunded },
+        { OrderStatus.Delivered, OrderStatus.Refunded },
+        { OrderStatus.PartiallyRefunded, OrderStatus.Refunded },
     };
 
     [Theory]
@@ -62,6 +72,8 @@ public class OrderStatusTransitionTests
         { OrderStatus.Pending, OrderStatus.Shipped },
         { OrderStatus.Pending, OrderStatus.Delivered },
         { OrderStatus.Pending, OrderStatus.Pending },
+        { OrderStatus.Pending, OrderStatus.Refunded },
+        { OrderStatus.Pending, OrderStatus.PartiallyRefunded },
         { OrderStatus.PaymentReceived, OrderStatus.PaymentReceived },
         { OrderStatus.PaymentReceived, OrderStatus.Shipped },
         { OrderStatus.PaymentReceived, OrderStatus.Delivered },
@@ -74,12 +86,30 @@ public class OrderStatusTransitionTests
         { OrderStatus.Shipped, OrderStatus.Processing },
         { OrderStatus.Shipped, OrderStatus.Pending },
         { OrderStatus.Shipped, OrderStatus.Shipped },
+        { OrderStatus.Shipped, OrderStatus.Refunded },
+        { OrderStatus.Shipped, OrderStatus.PaymentReceived },
         { OrderStatus.Delivered, OrderStatus.Cancelled },
         { OrderStatus.Delivered, OrderStatus.Shipped },
         { OrderStatus.Delivered, OrderStatus.Pending },
+        { OrderStatus.Delivered, OrderStatus.Delivered },
+        { OrderStatus.Delivered, OrderStatus.PartiallyRefunded },
+        { OrderStatus.Delivered, OrderStatus.Processing },
+        { OrderStatus.PartiallyRefunded, OrderStatus.PartiallyRefunded },
+        { OrderStatus.PartiallyRefunded, OrderStatus.Processing },
+        { OrderStatus.PartiallyRefunded, OrderStatus.Shipped },
+        { OrderStatus.PartiallyRefunded, OrderStatus.Delivered },
+        { OrderStatus.PartiallyRefunded, OrderStatus.Cancelled },
+        { OrderStatus.PartiallyRefunded, OrderStatus.Pending },
+        { OrderStatus.PartiallyRefunded, OrderStatus.PaymentReceived },
+        { OrderStatus.Refunded, OrderStatus.Pending },
+        { OrderStatus.Refunded, OrderStatus.Refunded },
+        { OrderStatus.Refunded, OrderStatus.PartiallyRefunded },
+        { OrderStatus.Refunded, OrderStatus.Delivered },
         { OrderStatus.Cancelled, OrderStatus.Pending },
         { OrderStatus.Cancelled, OrderStatus.Processing },
         { OrderStatus.Cancelled, OrderStatus.Delivered },
+        { OrderStatus.Cancelled, OrderStatus.Refunded },
+        { OrderStatus.Cancelled, OrderStatus.PartiallyRefunded },
     };
 
     [Theory]
@@ -102,7 +132,8 @@ public class OrderStatusTransitionTests
         repoMock.Setup(r => r.GetByIdAsync(It.IsAny<string>())).ReturnsAsync((Order?)null);
         repoMock.Setup(r => r.GetByIdAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync((Order?)null);
         var service = new OrderService(repoMock.Object, new Mock<IRepository<Cart>>().Object,
-            new Mock<IRepository<Product>>().Object, RealMapper());
+            new Mock<IRepository<Product>>().Object, RealMapper(),
+            context: null, paymentService: Mock.Of<IStripePaymentService>());
 
         var act = () => service.UpdateOrderStatusAsync("missing", OrderStatus.Cancelled);
 
