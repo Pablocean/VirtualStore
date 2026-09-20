@@ -1,4 +1,5 @@
 using AutoMapper;
+using System.Linq.Expressions;
 using VirtualStore.Application.Common;
 using VirtualStore.Application.DTOs;
 using VirtualStore.Application.Interfaces;
@@ -36,43 +37,45 @@ public class ProductService : IProductService
 
     public async Task<PagedResult<ProductDto>> GetProductsAsync(ProductFilterDto filter)
     {
-        var allProducts = await _productRepo.GetAllAsync();
-        var query = allProducts.AsQueryable();
+        var predicate = BuildPredicate(filter);
 
-        if (!string.IsNullOrWhiteSpace(filter.Search))
-            query = query.Where(p => p.Name.Contains(filter.Search, StringComparison.OrdinalIgnoreCase));
-        if (!string.IsNullOrWhiteSpace(filter.CategoryId))
-            query = query.Where(p => p.CategoryId == filter.CategoryId);
-        if (filter.MinPrice.HasValue)
-            query = query.Where(p => p.Price >= filter.MinPrice.Value);
-        if (filter.MaxPrice.HasValue)
-            query = query.Where(p => p.Price <= filter.MaxPrice.Value);
-        if (filter.IsActive.HasValue)
-            query = query.Where(p => p.IsActive == filter.IsActive.Value);
+        var page = filter.PageNumber < 1 ? 1 : filter.PageNumber;
+        var size = filter.PageSize <= 0 ? 20 : Math.Min(filter.PageSize, 100);
 
-        var total = query.Count();
-        var items = query.Skip((filter.PageNumber - 1) * filter.PageSize)
-                         .Take(filter.PageSize)
-                         .ToList();
+        // Server-side filter + paging (Name contains translates to regex via Builders).
+        var (items, total) = await _productRepo.PagedAsync(predicate, page, size, sortBy: null, desc: true);
 
-        var dtos = new List<ProductDto>();
-        foreach (var product in items)
+        // Batch category hydration (single query instead of N+1 GetById).
+        var categoryIds = items
+            .Where(p => !string.IsNullOrEmpty(p.CategoryId))
+            .Select(p => p.CategoryId)
+            .Distinct()
+            .ToList();
+
+        Dictionary<string, string> categoryNames = new();
+        if (categoryIds.Count > 0)
+        {
+            var categories = await _categoryRepo.FindAsync(c => categoryIds.Contains(c.Id));
+            categoryNames = categories.ToDictionary(c => c.Id, c => c.Name);
+        }
+
+        var dtos = items.Select(product =>
         {
             var dto = _mapper.Map<ProductDto>(product);
-            if (!string.IsNullOrEmpty(product.CategoryId))
+            if (!string.IsNullOrEmpty(product.CategoryId) &&
+                categoryNames.TryGetValue(product.CategoryId, out var name))
             {
-                var cat = await _categoryRepo.GetByIdAsync(product.CategoryId);
-                dto.CategoryName = cat?.Name;
+                dto.CategoryName = name;
             }
-            dtos.Add(dto);
-        }
+            return dto;
+        }).ToList();
 
         return new PagedResult<ProductDto>
         {
             Items = dtos,
-            TotalCount = total,
-            PageNumber = filter.PageNumber,
-            PageSize = filter.PageSize
+            TotalCount = checked((int)total),
+            PageNumber = page,
+            PageSize = size
         };
     }
 
@@ -95,5 +98,68 @@ public class ProductService : IProductService
     {
         var product = await _productRepo.GetByIdAsync(id) ?? throw new KeyNotFoundException("Product not found");
         await _productRepo.DeleteAsync(id);
+    }
+
+    private static Expression<Func<Product, bool>> BuildPredicate(ProductFilterDto filter)
+    {
+        Expression<Func<Product, bool>> predicate = p => true;
+
+        if (!string.IsNullOrWhiteSpace(filter.Search))
+        {
+            var search = filter.Search.Trim().ToLower();
+            Expression<Func<Product, bool>> searchPredicate = p => p.Name.ToLower().Contains(search);
+            predicate = AndAlso(predicate, searchPredicate);
+        }
+        if (!string.IsNullOrWhiteSpace(filter.CategoryId))
+        {
+            var categoryId = filter.CategoryId;
+            Expression<Func<Product, bool>> categoryPredicate = p => p.CategoryId == categoryId;
+            predicate = AndAlso(predicate, categoryPredicate);
+        }
+        if (filter.MinPrice.HasValue)
+        {
+            var min = filter.MinPrice.Value;
+            Expression<Func<Product, bool>> minPredicate = p => p.Price >= min;
+            predicate = AndAlso(predicate, minPredicate);
+        }
+        if (filter.MaxPrice.HasValue)
+        {
+            var max = filter.MaxPrice.Value;
+            Expression<Func<Product, bool>> maxPredicate = p => p.Price <= max;
+            predicate = AndAlso(predicate, maxPredicate);
+        }
+        if (filter.IsActive.HasValue)
+        {
+            var isActive = filter.IsActive.Value;
+            Expression<Func<Product, bool>> activePredicate = p => p.IsActive == isActive;
+            predicate = AndAlso(predicate, activePredicate);
+        }
+
+        return predicate;
+    }
+
+    private static Expression<Func<Product, bool>> AndAlso(
+        Expression<Func<Product, bool>> left,
+        Expression<Func<Product, bool>> right)
+    {
+        var param = Expression.Parameter(typeof(Product), "p");
+        var leftBody = new ParameterReplacer(left.Parameters[0], param).Visit(left.Body)!;
+        var rightBody = new ParameterReplacer(right.Parameters[0], param).Visit(right.Body)!;
+        return Expression.Lambda<Func<Product, bool>>(Expression.AndAlso(leftBody, rightBody), param);
+    }
+
+    private sealed class ParameterReplacer : ExpressionVisitor
+    {
+        private readonly ParameterExpression _from;
+        private readonly ParameterExpression _to;
+
+        public ParameterReplacer(ParameterExpression from, ParameterExpression to)
+        {
+            _from = from;
+            _to = to;
+        }
+
+        protected override Expression VisitParameter(ParameterExpression node)
+            => node == _from ? _to : base.VisitParameter(node);
     }
 }

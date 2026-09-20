@@ -9,7 +9,8 @@ public class MappingProfile : Profile
     public MappingProfile()
     {
         // ==================== USER ====================
-        CreateMap<User, UserDto>().ReverseMap();
+        // One-way only: UserDto is outbound. No inbound map (prevents Id overwrite).
+        CreateMap<User, UserDto>();
 
         CreateMap<CreateUserDto, User>()
             .ForMember(dest => dest.PasswordHash, opt => opt.Ignore())
@@ -55,7 +56,8 @@ public class MappingProfile : Profile
         updateProductMap.ForMember(dest => dest.IsDeleted, opt => opt.Ignore());
 
         // ==================== CATEGORY ====================
-        CreateMap<Category, CategoryDto>().ReverseMap();
+        // One-way only: CategoryDto is outbound. No inbound map (prevents Id overwrite).
+        CreateMap<Category, CategoryDto>();
 
         CreateMap<CreateCategoryDto, Category>()
             .ForMember(dest => dest.IsActive, opt => opt.Ignore())
