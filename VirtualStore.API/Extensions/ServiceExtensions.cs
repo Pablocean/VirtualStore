@@ -38,6 +38,8 @@ public static class ServiceExtensions
 {
     public static IServiceCollection AddApplicationServices(this IServiceCollection services, IConfiguration config)
     {
+        ValidateRequiredConfiguration(config);
+
         // Settings
         services.Configure<MongoDbSettings>(config.GetSection("MongoDbSettings"));
         services.Configure<JwtSettings>(config.GetSection("JwtSettings"));
@@ -125,6 +127,58 @@ public static class ServiceExtensions
 
         return services;
     }
+
+    #region Wave 3a-D - Startup config validation
+    // Fail-fast single-source-of-truth guard (Epic D). Called at the TOP of
+    // AddApplicationServices, before JWT Auth setup. Uses IConfiguration reads
+    // (IOptions isn't built yet at this point — read via config.GetSection().Get<T>()).
+    public static void ValidateRequiredConfiguration(IConfiguration config)
+    {
+        var jwt = config.GetSection("JwtSettings").Get<JwtSettings>();
+        if (string.IsNullOrEmpty(jwt?.Secret) || jwt.Secret.Length < 32)
+            throw new InvalidOperationException(
+                "Startup config validation failed: JwtSettings:Secret (env JwtSettings__Secret) " +
+                "must be at least 32 characters. Fix: set a 64-char random secret via " +
+                "JwtSettings__Secret in .env / environment.");
+
+        var mongo = config.GetSection("MongoDbSettings").Get<MongoDbSettings>();
+        if (string.IsNullOrWhiteSpace(mongo?.ConnectionString))
+            throw new InvalidOperationException(
+                "Startup config validation failed: MongoDbSettings:ConnectionString " +
+                "(env MongoDbSettings__ConnectionString) must be non-empty. Fix: set " +
+                "MongoDbSettings__ConnectionString in .env / environment " +
+                "(e.g. mongodb://localhost:27017).");
+
+        var envName = config["ASPNETCORE_ENVIRONMENT"]
+            ?? Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+            ?? Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT");
+        var isProduction = string.Equals(envName, "Production", StringComparison.OrdinalIgnoreCase);
+
+        var stripe = config.GetSection("StripeSettings").Get<StripeSettings>();
+        var email = config.GetSection("EmailSettings").Get<EmailSettings>();
+
+        if (isProduction)
+        {
+            if (string.IsNullOrWhiteSpace(stripe?.SecretKey))
+                throw new InvalidOperationException(
+                    "Startup config validation failed: StripeSettings:SecretKey " +
+                    "(env StripeSettings__SecretKey) is required in Production. Fix: set " +
+                    "StripeSettings__SecretKey in Production environment / vault.");
+            if (string.IsNullOrWhiteSpace(email?.Password))
+                throw new InvalidOperationException(
+                    "Startup config validation failed: EmailSettings:Password " +
+                    "(env EmailSettings__Password) is required in Production. Fix: set " +
+                    "EmailSettings__Password in Production environment / vault.");
+        }
+        else
+        {
+            if (string.IsNullOrWhiteSpace(stripe?.SecretKey))
+                Console.WriteLine("WARNING: StripeSettings:SecretKey (env StripeSettings__SecretKey) is empty — payments will fail until configured.");
+            if (string.IsNullOrWhiteSpace(email?.Password))
+                Console.WriteLine("WARNING: EmailSettings:Password (env EmailSettings__Password) is empty — OTP email will fail until configured.");
+        }
+    }
+    #endregion
 
     public static IServiceCollection AddSwaggerDocumentation(this IServiceCollection services)
     {

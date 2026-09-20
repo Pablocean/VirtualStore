@@ -44,6 +44,8 @@
 
 `.env` is gitignored; `.env.example` documents every key. Production must inject via environment/vault — never bake secrets into the Docker image.
 
+**Fail-fast startup (Epic D):** `ValidateRequiredConfiguration` runs at the top of `AddApplicationServices` (before JWT setup, via `IConfiguration` reads) and throws `InvalidOperationException` naming the key and fix when `JwtSettings:Secret` is shorter than 32 chars or `MongoDbSettings:ConnectionString` is empty (all environments). In `Production` an empty `StripeSettings:SecretKey` or `EmailSettings:Password` also throws; in `Development` those two only log a startup warning so local boot isn't blocked.
+
 ## Residual risks (accepted / queued)
 
 - Refresh tokens stored server-side in clear text — DB read = session hijack; accepted (Mongo access = full compromise anyway), mitigated by reuse detection + short access lifetime.
