@@ -41,19 +41,22 @@ It supports product and service management, role-based access, JWT authenticatio
 - **Authentication & Authorization**:
   - JWT access token + HTTP-only refresh token.
   - Two-factor authentication via email OTP.
+  - Brute-force lockout (5 failures → 15 min, `423`), email-confirmation gate (`403`).
+  - Password lifecycle: confirm / resend / change / forgot / reset.
   - Role-based access (`Customer`, `Manager`, `Admin`).
 - **User & Enterprise Management**: CRUD operations for users, products, categories, enterprise info.
+- **Privacy (GDPR)**: self-service export (`GET /api/me/export`) and erasure (`POST /api/me/purge`); refresh-token cap (10 active) + nightly purge with 90-day forensics retention.
 - **Shopping Cart & Orders**:
   - Persistent cart per user.
-  - Order creation with status tracking.
-  - Stripe payment intent creation & webhook handling.
+  - Transactional order creation (replica-set transactions) with idempotency keys and status tracking (incl. `Refunded`/`PartiallyRefunded`).
+  - Stripe payment intent creation (post-commit linkage, deterministic idempotency keys) & webhook handling (signature-verified, deduped).
 - **Security**:
   - BCrypt password hashing.
   - Refresh token rotation & automatic revocation.
   - CORS, HTTPS, JWT signing key from secure configuration.
 - **Background Jobs**:
   - Quartz.NET – daily cleanup of expired refresh tokens.
-- **Caching**: In-memory cache for performance-critical data.
+- **Caching**: HybridCache (in-memory L1; shared Redis L2 when `Redis__ConnectionString` is set); OTP + lifecycle tokens on `IDistributedCache`.
 - **Health Checks**: Endpoint `/health` with MongoDB connectivity verification.
 - **API Documentation**: Interactive UI using **Scalar** (OpenAPI 3.1).
 - **Configuration**: Sensible defaults with `.env` file for secrets (dotenv.net).
@@ -145,6 +148,7 @@ VirtualStore.slnx
 │   │   ├── Category.cs
 │   │   ├── Cart.cs / CartItem.cs
 │   │   ├── Order.cs / OrderItem.cs
+│   │   ├── ProcessedWebhookEvent.cs  # Stripe dedup (unique eventId + 30-day TTL)
 │   │   └── EnterpriseInfo.cs
 │   ├── Enums/
 │   │   ├── UserRole.cs
@@ -182,34 +186,35 @@ VirtualStore.slnx
 │   │   ├── IEmailService.cs
 │   │   ├── IStripePaymentService.cs
 │   │   ├── ICacheService.cs
-│   ├── Validators/                  # 13 FluentValidators (Login, Create/Update *, cart, order, address)
+│   ├── Validators/                  # 19 FluentValidators (login, auth lifecycle, Create/Update *, cart, order, purge, address)
 │   └── Mappings/
 │       └── MappingProfile.cs
 ├── VirtualStore.Infrastructure/
 │   ├── BackgroundServices/
 │   │   └── RefreshTokenCleanupJob.cs
 │   ├── Data/
-│   │   └── MongoDbContext.cs        # EnsureIndexesAsync: ux_user_email, ux_cart_userId, ix_order_userId, ix_product_categoryId, ix_category_parentCategoryId
+│   │   └── MongoDbContext.cs        # EnsureIndexesAsync: ux_user_email, ux_cart_userId, ix_order_userId, ux_order_userIdempotency, ix_product_categoryId, ix_category_parentCategoryId, ux_webhookevent_eventId (+30-day TTL)
 │   ├── Email/
 │   │   └── EmailService.cs
 │   ├── Repositories/
 │   │   └── MongoRepository.cs
 │   ├── Services/
-│   │   ├── AuthService.cs           # reuse detection, OTP (5 attempts / 10 min)
+│   │   ├── AuthService.cs           # reuse detection, OTP (5 attempts / 10 min, IDistributedCache), lockout, confirm/reset tokens, 10-active token cap
 │   │   ├── TokenService.cs          # sub + NameIdentifier + role claims
-│   │   ├── UserService.cs
+│   │   ├── UserService.cs           # CRUD + GDPR export/purge (HardDeleteAsync)
 │   │   ├── ProductService.cs
 │   │   ├── CategoryService.cs
 │   │   ├── CartService.cs
-│   │   ├── OrderService.cs          # server-side pricing + status machine
+│   │   ├── OrderService.cs          # transactional checkout (TransactAsync) + idempotency keys + server-side pricing + status machine (incl. Refunded/PartiallyRefunded), post-commit Stripe intent linkage
 │   │   ├── EnterpriseInfoService.cs
-│   │   └── CacheService.cs
+│   │   └── CacheService.cs          # ICacheService over HybridCache (Redis L2 opt-in)
 │   └── Stripe/
 │       └── StripePaymentService.cs  # intents, refunds, webhook verification
 └── VirtualStore.API/
     ├── Controllers/
-    │   ├── AuthController.cs
-    │   ├── UsersController.cs       # Admin-only
+    │   ├── AuthController.cs        # login/refresh/logout + confirm/resend/change/forgot/reset (auth policy: 5/min)
+    │   ├── UsersController.cs       # Admin-only (soft-delete)
+    │   ├── MeController.cs          # self-service export/purge (any authenticated role)
     │   ├── ProductsController.cs
     │   ├── CategoriesController.cs
     │   ├── CartController.cs
@@ -243,7 +248,9 @@ VirtualStore.slnx
 | Email | MailKit (SMTP) |
 | Payments | Stripe.net |
 | Background Jobs | Quartz.NET |
-| Caching | In-Memory Cache (Microsoft.Extensions.Caching.Memory) |
+| Caching | HybridCache (in-memory L1, optional Redis L2 via StackExchangeRedis) |
+| Rate limiting | ASP.NET Core RateLimiter (auth 5/min, webhook 60/min, global 100/min per IP) |
+| Observability | OpenTelemetry (traces + metrics, OTLP exporter opt-in) |
 | Validation | FluentValidation |
 | Object Mapping | AutoMapper 16.1.1 |
 | API Documentation | Scalar (Microsoft.AspNetCore.OpenApi + Scalar.AspNetCore) |
@@ -366,20 +373,28 @@ The Scalar UI supports setting the JWT token via the padlock icon.
 
 ## 📡 API Endpoints Overview
 
-32 routes (31 controller endpoints + `GET /health`). Failures use RFC 7807
+39 routes (38 controller endpoints + `GET /health`). Failures use RFC 7807
 `ProblemDetails` with a `traceId` extension (`400` validation + `errors` map,
-`401`, `403` non-owner order access, `404`, `409` illegal order transition,
-`500`; `429` reserved for the in-progress wave-2f rate limiting).
+`401`, `403` non-owner order access / unconfirmed email, `404`, `409` illegal
+order transition, `423` account locked, `429` rate limited with `Retry-After`,
+`500`).
 
 | Method | Endpoint | Roles | Description |
 |---|---|---|---|
-| POST | `/api/auth/login` | Anonymous | Login, get tokens (OTP step if 2FA enabled) |
+| POST | `/api/auth/login` | Anonymous | Login, get tokens (OTP step if 2FA enabled; `423` when locked, `403` when email unconfirmed) |
 | POST | `/api/auth/refresh-token` | Anonymous (cookie) | Rotate refresh token (reuse detected → all revoked) |
 | POST | `/api/auth/logout` | Authenticated | Revoke refresh token |
+| POST | `/api/auth/confirm-email` | Anonymous | Confirm email address (single-use 24 h token) |
+| POST | `/api/auth/resend-confirmation` | Anonymous | Re-send confirmation (always 200, no enumeration) |
+| POST | `/api/auth/change-password` | Authenticated | Change password (revokes all refresh tokens) |
+| POST | `/api/auth/forgot-password` | Anonymous | Request password reset (always 200, no enumeration) |
+| POST | `/api/auth/reset-password` | Anonymous | Reset password with single-use 1 h token (revokes all refresh tokens) |
 | GET | `/api/users` | Admin | List users (paged, filterable) |
 | POST | `/api/users` | Admin | Create a new user |
 | PUT | `/api/users/{id}` | Admin | Update a user |
-| DELETE | `/api/users/{id}` | Admin | Delete a user |
+| DELETE | `/api/users/{id}` | Admin | Soft-delete a user (flagged, recoverable) |
+| GET | `/api/me/export` | Authenticated | Export own profile + orders + carts + token metadata (no secrets) |
+| POST | `/api/me/purge` | Authenticated | GDPR erasure: hard-delete user, delete carts, pseudonymize orders |
 | GET | `/api/products` | Anonymous | List products (filterable, paged) |
 | GET | `/api/products/{id}` | Anonymous | Get product details |
 | POST | `/api/products` | Admin, Manager | Create a product |
@@ -431,11 +446,12 @@ StripeSettings__WebhookSecret=whsec_...
 
 ## 🧪 Testing
 
-Test suites live under `tests/` (owned by wave 2e — see [`docs/TESTING.md`](docs/TESTING.md)
-for the full contract):
+Test suites live under `VirtualStore.UnitTests/` (no containers) and
+`VirtualStore.IntegrationTests/` (trait-gated, **require Docker/Testcontainers
+for MongoDB**) — see [`docs/TESTING.md`](docs/TESTING.md) for the full contract:
 
-- **Unit tests** (no containers): services (mocked `IRepository<T>`), the 13
-  FluentValidators, `UserRoles`, `PagedResult`, AutoMapper profile, order status machine.
+- **Unit tests** (no containers): services (mocked `IRepository<T>`), the 19
+  FluentValidators, `UserRoles`, `PagedResult`, AutoMapper profile, order status machine (incl. refund transitions), token cap, webhook dedup, config drift.
 - **Integration tests** (trait-gated, **require Docker/Testcontainers for MongoDB**):
   controllers via `WebApplicationFactory` — happy paths, auth matrix
   (anonymous → 401, wrong role → 403), and `ProblemDetails` shape incl. `traceId`.
@@ -476,9 +492,10 @@ All sensitive settings (connection strings, secrets) must be supplied via enviro
 
 ## 📈 Monitoring & Observability
 
-- **Health Checks:** `/health` for liveness and readiness probes.
-- **Structured Logging:** Serilog with console and file sinks (configurable).
-- **Metrics:** OpenTelemetry can be integrated for distributed tracing and metrics.
+- **Health Checks:** `/health` (readiness, incl. MongoDB) + `/health/live` (liveness) for probes.
+- **Structured Logging:** Serilog with console and file sinks (configurable); errors carry `traceId`.
+- **Metrics & Tracing:** OpenTelemetry wired (ASP.NET Core + HttpClient + runtime); OTLP export opt-in via `Otlp:Endpoint`.
+- **Rate limiting:** enforced per IP — `auth` 5/min, `webhook` 60/min, global 100/min; `429` with `Retry-After`.
 
 ---
 

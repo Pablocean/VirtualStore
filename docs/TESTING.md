@@ -14,10 +14,11 @@ No test may hit Stripe/SMTP: mock `IStripePaymentService` / `IEmailService`. Web
 ## What to cover (minimum per slice)
 
 1. **Service unit**: happy path + `KeyNotFoundException` (→404) + `InvalidOperationException` (→409) + `UnauthorizedAccessException` (→401). `OrderService`: server-side re-pricing (client total ignored), stock decrement, cart cleared only after insert, every allowed/forbidden status transition.
-2. **Validator**: one case per rule across the 13 validators (`LoginRequest`, `Create/Update` user/product/category, cart, order items, address).
+2. **Validator**: one case per rule across the 19 validators (`LoginRequest`, auth lifecycle (`Change/Confirm/Resend/Forgot/ResetPassword`), `Create/Update` user/product/category, cart, order items, address, purge).
 3. **Controller integration**: happy path + auth matrix (anonymous → 401, wrong role → 403, `Admin`-only users endpoints) + one `ProblemDetails` assertion (`traceId` present, `errors` map on 400).
-4. **Auth flows**: login → refresh rotation → reuse detection (replay revoked token ⇒ all tokens revoked + 401) → logout; OTP issue/verify/attempt-lockout (5 max).
-5. **Payments**: intent creation shape, refund (incl. `400` without payment intent), webhook signature rejection (`400`) and state mirroring (`PaymentReceived`/`Cancelled`).
+4. **Auth flows**: login → refresh rotation → reuse detection (replay revoked token ⇒ all tokens revoked + 401) → logout; OTP issue/verify/attempt-lockout (5 max); lockout (5 bad passwords → 423) + email-confirm gate (403); token cap (11th login revokes oldest, 10 active max); purge/export (GDPR).
+5. **Payments**: intent creation shape, deterministic idempotency keys, post-commit linkage + retry attach, refund (incl. `400` without payment intent, stock restore on full only), webhook signature rejection (`400`), state mirroring (`PaymentReceived`/`Cancelled`), redelivery dedup (`duplicate: true`).
+6. **Config**: `ConfigDriftTests` keeps `appsettings.json` ↔ `.env.example` in sync; startup fails fast on missing secrets.
 
 ## Requirements
 

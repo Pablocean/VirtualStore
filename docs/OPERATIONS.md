@@ -94,6 +94,6 @@ mongorestore --uri "mongodb://localhost:27017" --drop ./backups/virtualstore-202
 
 ## Observability opt-ins
 
-- **OTLP / OpenTelemetry: in progress (wave 2f)** — not merged. When it lands: point `OTEL_EXPORTER_OTLP_ENDPOINT` at your collector; traces will join the existing `traceId`.
-- **Rate limiting: in progress (wave 2f)** — no limiter merged; `429` is reserved in the API contract. Until then, protect public edges (login, webhook) with reverse-proxy throttling.
+- **OTLP / OpenTelemetry: wired** — ASP.NET Core + HttpClient tracing and ASP.NET Core + runtime metrics always on; OTLP export opt-in via `Otlp:Endpoint` (point it at your collector; traces join the existing `traceId`).
+- **Rate limiting: enforced** — `auth` 5/min, `webhook` 60/min, global 100/min per IP (sliding window); rejections return `429` ProblemDetails with `Retry-After`. Until reverse-proxy throttling is added, these are the only public-edge guard.
 - Metrics endpoint: none yet — scrape via OTel (wave 2f) or add `OpenTelemetry.Exporter.Prometheus` per your platform.
