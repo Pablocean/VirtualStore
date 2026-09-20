@@ -48,6 +48,10 @@ public static class ServiceExtensions
         services.AddScoped<IStripePaymentService, StripePaymentService>();
         services.AddSingleton<ICacheService, CacheService>();
 
+        // ===== BEGIN wave/1d-orders-payments additions (keep grouped; parallel waves edit this file too) =====
+        services.AddScoped<ICategoryService, CategoryService>();
+        // ===== END wave/1d-orders-payments additions =====
+
         // AutoMapper
         var mapperConfig = new AutoMapper.MapperConfiguration(
             cfg => cfg.AddProfile<MappingProfile>(),
