@@ -2,7 +2,6 @@ using dotenv.net;
 using Scalar.AspNetCore;
 using Serilog;
 using VirtualStore.API.Extensions;
-using VirtualStore.API.Middlewares;
 
 try
 {
@@ -26,14 +25,17 @@ try
     builder.Services.AddApplicationServices(builder.Configuration);
     builder.Services.AddSwaggerDocumentation();
     builder.Services.AddControllers();
+    builder.Services.AddWave1bValidationAndErrors();
 
     var app = builder.Build();
+
+    app.UseExceptionHandler();
+    app.UseStatusCodePages();
 
     if (app.Environment.IsDevelopment())
     {
         app.MapOpenApi();
         app.MapScalarApiReference();
-        app.UseDeveloperExceptionPage();
     }
 
     // Inline request logging instead of UseSerilogRequestLogging()
@@ -48,7 +50,6 @@ try
     app.UseCors("CorsPolicy");
     app.UseAuthentication();
     app.UseAuthorization();
-    app.UseMiddleware<ErrorHandlingMiddleware>();
     app.MapHealthChecks("/health");
     app.MapControllers();
 

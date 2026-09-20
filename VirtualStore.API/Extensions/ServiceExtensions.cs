@@ -1,4 +1,6 @@
 using AutoMapper;
+using FluentValidation;
+using FluentValidation.AspNetCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -8,9 +10,12 @@ using Quartz;
 using Serilog;
 using Serilog.Extensions.Hosting;
 using System.Text;
+using System.Text.Json.Serialization;
 using VirtualStore.API.Data;
+using VirtualStore.API.Middlewares;
 using VirtualStore.Application.Interfaces;
 using VirtualStore.Application.Mappings;
+using VirtualStore.Application.Validators;
 using VirtualStore.Domain.Interfaces;
 using VirtualStore.Domain.Settings;
 using VirtualStore.Infrastructure.BackgroundServices;
@@ -121,4 +126,22 @@ public static class ServiceExtensions
         // For Swagger UI you can use Scalar: app.MapScalarApiReference();
         return services;
     }
+
+    #region Wave 1b - Validation + ProblemDetails (parallel-wave merge zone: keep wave-1b additions inside this region)
+    public static IServiceCollection AddWave1bValidationAndErrors(this IServiceCollection services)
+    {
+        services.AddProblemDetails();
+        services.AddExceptionHandler<ApiExceptionHandler>();
+
+        services.AddValidatorsFromAssemblyContaining<LoginRequestValidator>();
+        services.AddFluentValidationAutoValidation();
+
+        services.AddControllers().AddJsonOptions(options =>
+        {
+            options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        });
+
+        return services;
+    }
+    #endregion
 }
