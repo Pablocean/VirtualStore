@@ -19,6 +19,14 @@ public interface IRepository<T> where T : BaseEntity
     Task UpdateAsync(string id, T entity, CancellationToken ct);
     Task DeleteAsync(string id);
     Task DeleteAsync(string id, CancellationToken ct);
+    /// <summary>
+    /// Physically removes the document (<c>DeleteOne</c>), bypassing the
+    /// soft-delete flag. Reserved for GDPR erasure (`POST /api/me/purge`,
+    /// ADR-0010). Admin <c>DELETE /api/users/{id}</c> stays soft-delete
+    /// (<see cref="DeleteAsync(string)"/>).
+    /// </summary>
+    Task HardDeleteAsync(string id);
+    Task HardDeleteAsync(string id, CancellationToken ct);
     Task<bool> ExistsAsync(Expression<Func<T, bool>> predicate);
     Task<bool> ExistsAsync(Expression<Func<T, bool>> predicate, CancellationToken ct);
 

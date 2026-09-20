@@ -32,6 +32,9 @@ services:
       # DatabaseSeeder__* via environment or a .env file (see .env.example).
     env_file:
       - .env
+    volumes:
+      # Persist Serilog file logs (Logs/log-.txt) across restarts.
+      - ./Logs:/app/Logs
 
 volumes:
   mongo-data:

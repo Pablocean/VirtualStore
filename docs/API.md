@@ -1,7 +1,7 @@
 # API.md — VirtualStore HTTP reference
 
 Base URL (dev): `https://localhost:7038` · Interactive docs: `/scalar/v1` (dev-only, JWT via **Authorize** button — wired by `BearerSecuritySchemeTransformer`).
-**37 routes**: 36 controller endpoints + `GET /health`. Auth column: `Anonymous` | `Auth` (any JWT) | role list.
+**39 routes**: 38 controller endpoints + `GET /health`. Auth column: `Anonymous` | `Auth` (any JWT) | role list.
 
 ## Envelope & errors
 
@@ -54,6 +54,15 @@ Success bodies are the DTO named per route. Failures use RFC 7807 `ProblemDetail
 | DELETE | `/api/users/{id}` | Admin | — | `204`. `404` unknown id |
 
 > Permission note: there is no self-service registration — every users endpoint requires `Admin`.
+
+## Me — `api/me` (all Authenticated, any role; identity from claims)
+
+| Method | Path | Auth | Body | Responses |
+|---|---|---|---|---|
+| GET | `/api/me/export` | Auth | — | `200 MeExportDto{profile: UserDto, orders: OrderDto[], carts: CartDto[], tokenMetadata[{created, createdByIp, expires, revoked, revokedByIp, hasReplacement, isActive}], exportedAt}` — **no secrets**: no password hash, no `Token`/`ReplacedByToken` values. `404` unknown id |
+| POST | `/api/me/purge` | Auth | `{ "confirmPassword": "string" }` (current password, required) | `200 PurgeResultDto{userDeleted, cartsDeleted, ordersPseudonymized}` — hard-deletes the user doc, deletes carts, pseudonymizes orders (`UserId → "deleted:{sha256hex}"`, address stripped, items/totals/status kept), clears OTP/confirm/reset cache keys. `400` validation. `401` wrong password |
+
+> Soft-delete vs purge: `DELETE /api/users/{id}` (Admin-only) is a **soft-delete** — it flags `IsDeleted` and retains all data (recoverable/auditable). `POST /api/me/purge` is **GDPR erasure** — the user document is physically removed (`HardDeleteAsync`), carts are deleted, and orders are anonymized; it cannot be undone. See ADR-0010.
 
 ## Products — `api/products`
 
