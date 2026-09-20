@@ -1,6 +1,7 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
-using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Options;
 using VirtualStore.Application.DTOs.Auth;
 using VirtualStore.Application.Interfaces;
@@ -18,14 +19,14 @@ public class AuthService : IAuthService
     private readonly IRepository<User> _userRepository;
     private readonly ITokenService _tokenService;
     private readonly IEmailService _emailService;
-    private readonly IMemoryCache _cache;
+    private readonly IDistributedCache _cache;
     private readonly JwtSettings _jwtSettings;
 
     public AuthService(
         IRepository<User> userRepository,
         ITokenService tokenService,
         IEmailService emailService,
-        IMemoryCache cache,
+        IDistributedCache cache,
         IOptions<JwtSettings> jwtSettings)
     {
         _userRepository = userRepository;
@@ -45,14 +46,17 @@ public class AuthService : IAuthService
         if (user.TwoFactorEnabled && string.IsNullOrEmpty(request.OtpCode))
         {
             var otp = GenerateOtp();
-            _cache.Set(OtpCacheKey(user.Email), otp, OtpLifetime);
+            await _cache.SetStringAsync(
+                OtpCacheKey(user.Email),
+                otp,
+                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = OtpLifetime });
             await _emailService.SendOtpEmailAsync(user.Email, otp);
             return new TokenResponse { RequiresTwoFactor = true };
         }
 
         if (user.TwoFactorEnabled && !string.IsNullOrEmpty(request.OtpCode))
         {
-            ValidateOtpOrThrow(user.Email, request.OtpCode);
+            await ValidateOtpOrThrowAsync(user.Email, request.OtpCode);
         }
 
         // Generate tokens
@@ -148,28 +152,36 @@ public class AuthService : IAuthService
 
     private static string OtpAttemptCacheKey(string email) => $"otp_attempts_{email.ToLowerInvariant()}";
 
-    private void ValidateOtpOrThrow(string email, string providedOtp)
+    private async Task ValidateOtpOrThrowAsync(string email, string providedOtp)
     {
         var otpKey = OtpCacheKey(email);
         var attemptKey = OtpAttemptCacheKey(email);
 
-        if (_cache.TryGetValue<int>(attemptKey, out var attempts) && attempts >= MaxOtpAttempts)
+        // Attempt counter is stored as a string-encoded int on IDistributedCache.
+        var attemptRaw = await _cache.GetStringAsync(attemptKey);
+        if (int.TryParse(attemptRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var attempts)
+            && attempts >= MaxOtpAttempts)
             throw new UnauthorizedAccessException("Too many OTP attempts");
 
-        var valid = _cache.TryGetValue<string>(otpKey, out var cachedOtp)
-            && cachedOtp != null
+        var cachedOtp = await _cache.GetStringAsync(otpKey);
+        var valid = cachedOtp != null
             && CryptographicOperations.FixedTimeEquals(
                 Encoding.UTF8.GetBytes(cachedOtp),
                 Encoding.UTF8.GetBytes(providedOtp));
 
         if (!valid)
         {
-            var current = _cache.TryGetValue<int>(attemptKey, out var count) ? count : 0;
-            _cache.Set(attemptKey, current + 1, OtpLifetime);
+            var current = int.TryParse(attemptRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var count)
+                ? count
+                : 0;
+            await _cache.SetStringAsync(
+                attemptKey,
+                (current + 1).ToString(CultureInfo.InvariantCulture),
+                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = OtpLifetime });
             throw new UnauthorizedAccessException("Invalid OTP code");
         }
 
-        _cache.Remove(otpKey);
-        _cache.Remove(attemptKey);
+        await _cache.RemoveAsync(otpKey);
+        await _cache.RemoveAsync(attemptKey);
     }
 }

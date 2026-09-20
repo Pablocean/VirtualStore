@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using FluentAssertions;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -13,7 +14,7 @@ using Xunit;
 
 namespace VirtualStore.UnitTests.Services;
 
-public class AuthServiceTests : IDisposable
+public class AuthServiceTests
 {
     private const string KnownPassword = "Password123";
     private readonly string _passwordHash = BCrypt.Net.BCrypt.HashPassword(KnownPassword);
@@ -21,7 +22,7 @@ public class AuthServiceTests : IDisposable
     private readonly Mock<IRepository<User>> _users = new();
     private readonly Mock<ITokenService> _tokens = new();
     private readonly Mock<IEmailService> _email = new();
-    private readonly MemoryCache _cache = new(new MemoryCacheOptions());
+    private readonly MemoryDistributedCache _cache = new(Options.Create(new MemoryDistributedCacheOptions()));
     private readonly IOptions<JwtSettings> _jwtOptions = Options.Create(new JwtSettings
     {
         Secret = "test-secret-that-is-long-enough-for-hmac-256!!!",
@@ -59,7 +60,7 @@ public class AuthServiceTests : IDisposable
                 user != null && pred.Compile()(user) ? user : null);
     }
 
-    public void Dispose() => _cache.Dispose();
+    // NOTE: MemoryDistributedCache (backed by shared in-memory store) needs no disposal.
 
     [Fact]
     public async Task Login_Valid_Credentials_Returns_Tokens_And_Persists_RefreshToken()

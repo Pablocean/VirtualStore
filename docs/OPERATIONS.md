@@ -16,6 +16,7 @@ All settings bind from `appsettings.json`, overridden by env/`.env` (`__` separa
 | `StripeSettings__SecretKey` / `__PublishableKey` / `__WebhookSecret` | `""` | payments only | `sk_test_…` / `pk_test_…` / `whsec_…` |
 | `DatabaseSeeder__AdminEmail` / `__AdminPassword` / `__AdminUsername` | `admin@virtualstore.com` / `Admin123!` / `admin` | — | defaults log a warning — rotate |
 | `CorsSettings__AllowedOrigins__0/__1/__2` | `http://localhost:3000`, `https://localhost:7038`, `https://localhost:5293` | — | extend for your SPA |
+| `Redis__ConnectionString` | `""` | — | empty = in-memory cache + OTP (single instance); set to `host:port` for shared HybridCache L2 + distributed OTP |
 | `ASPNETCORE_ENVIRONMENT` | `Development` | — | `Production` in compose |
 
 Copy `.env.example` → `.env` for local dev. Production: inject via host env or vault; never commit `.env`.
@@ -55,6 +56,10 @@ Multi-document transactions (Epic A1: order checkout, stock decrement) fail on a
 ## Quartz (03:00 AM)
 
 `RefreshTokenCleanupJob`, cron `0 0 3 * * ?`, `[DisallowConcurrentExecution]`: deletes expired unrevoked refresh tokens across users, logs `Removed {Count} expired refresh tokens`. Missed runs are benign (next night catches up).
+
+## Cache (HybridCache + Redis L2 opt-in)
+
+`ICacheService` is backed by `HybridCache` (in-memory L1; absolute TTL when the caller passes one, else 5-minute absolute default). 2FA OTP codes + attempt counters live on `IDistributedCache` (10 min, lockout at 5). With `Redis__ConnectionString` empty everything is in-process (single-instance default); set it to `host:port` (compose: add a `redis:8` service + `Redis__ConnectionString=redis:6379`) to share cache + OTP across instances. No Redis health check wired yet — see ADR 0011.
 
 ## Logs (Serilog)
 
