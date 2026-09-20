@@ -139,4 +139,49 @@ Authorization: Bearer {{adminToken}}
 DELETE {{VirtualStore.API_HostAddress}}/api/categories/CATEGORY_ID_HERE
 Authorization: Bearer {{adminToken}}
 
+### Confirm email (200 on success, 409 on bad/expired token)
+POST {{VirtualStore.API_HostAddress}}/api/auth/confirm-email
+Content-Type: application/json
+
+{
+  "email": "user@virtualstore.example",
+  "token": "CONFIRM_TOKEN_HERE"
+}
+
+### Resend confirmation (always 200 generic, no enumeration)
+POST {{VirtualStore.API_HostAddress}}/api/auth/resend-confirmation
+Content-Type: application/json
+
+{
+  "email": "user@virtualstore.example"
+}
+
+### Change password (auth; revokes all refresh tokens)
+POST {{VirtualStore.API_HostAddress}}/api/auth/change-password
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "currentPassword": "OldPass123",
+  "newPassword": "NewPass123"
+}
+
+### Forgot password (always 200 generic, no enumeration)
+POST {{VirtualStore.API_HostAddress}}/api/auth/forgot-password
+Content-Type: application/json
+
+{
+  "email": "user@virtualstore.example"
+}
+
+### Reset password (200 on success, 409 on bad/expired token; revokes all sessions)
+POST {{VirtualStore.API_HostAddress}}/api/auth/reset-password
+Content-Type: application/json
+
+{
+  "email": "user@virtualstore.example",
+  "token": "RESET_TOKEN_HERE",
+  "newPassword": "BrandNew123"
+}
+
 ###

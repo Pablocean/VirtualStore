@@ -22,6 +22,24 @@
 - **Users surface is Admin-only** — no public registration; roles assigned via `CreateUserDto.Roles` and validated by `UserRoles.EnsureValid`.
 - Roles are a discrete list (`Customer/Manager/Admin`); no `[Flags]`, no bitwise checks — prevents privilege confusion from combined bit values.
 
+## Account lifecycle (Epic C, ADR-0008)
+
+- **Lockout:** `User.FailedAccessCount` + `User.LockoutEnd` (internal, never mapped).
+  Bad password increments (persisted); ≥ 5 failures sets `LockoutEnd = +15 min`
+  (that attempt still returns 401; the next attempt returns `423 Locked`).
+  Expired lockouts clear silently; success resets both counters.
+- **Email confirmation gate:** login after password+lockout checks rejects
+  unconfirmed emails with `403 "Email Not Confirmed"`. The seeded admin has
+  `EmailConfirmed = true`. Confirmation tokens live in `IDistributedCache` as
+  `emailconfirm_{userId-lower}` (24 h TTL, single-use, constant-time compare).
+- **Password lifecycle:** `change-password` (auth, BCrypt-verifies current) and
+  `reset-password` (anonymous, `pwdreset_{email-lower}`, 1 h TTL, single-use,
+  constant-time compare) both enforce the shared rule (min 8, upper+lower+digit),
+  rehash, and revoke ALL refresh tokens. `resend-confirmation` and
+  `forgot-password` ALWAYS return 200 with a generic message (no enumeration).
+- All lifecycle tokens are crypto-random 32-byte hex; all lifecycle mail goes
+  through the existing resilient `SendEmailAsync` pipeline.
+
 ## Transport & CORS
 
 - `UseHttpsRedirection` enforced; refresh cookie is `Secure` (note: cookie auth over plain HTTP in local dev will silently drop — use the HTTPS profile).

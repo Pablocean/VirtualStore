@@ -1,7 +1,7 @@
 # API.md — VirtualStore HTTP reference
 
 Base URL (dev): `https://localhost:7038` · Interactive docs: `/scalar/v1` (dev-only, JWT via **Authorize** button — wired by `BearerSecuritySchemeTransformer`).
-**32 routes**: 31 controller endpoints + `GET /health`. Auth column: `Anonymous` | `Auth` (any JWT) | role list.
+**37 routes**: 36 controller endpoints + `GET /health`. Auth column: `Anonymous` | `Auth` (any JWT) | role list.
 
 ## Envelope & errors
 
@@ -18,15 +18,16 @@ Success bodies are the DTO named per route. Failures use RFC 7807 `ProblemDetail
 }
 ```
 
-`errors` appears only for 400 validation failures. Mapping (`ApiExceptionHandler`): FluentValidation → **400**, `UnauthorizedAccessException` → **401**, `KeyNotFoundException` → **404**, `InvalidOperationException` → **409**, unhandled → **500** (message details only in Development). `traceId` = `Activity.Current.Id ?? HttpContext.TraceIdentifier` — include it in bug reports.
+`errors` appears only for 400 validation failures. Mapping (`ApiExceptionHandler`): FluentValidation → **400**, `UnauthorizedAccessException` → **401**, `EmailNotConfirmedException` → **403** (`"Email Not Confirmed"`), `KeyNotFoundException` → **404**, `InvalidOperationException` → **409**, `AccountLockedException` → **423** (`"Locked"`), unhandled → **500** (message details only in Development). `traceId` = `Activity.Current.Id ?? HttpContext.TraceIdentifier` — include it in bug reports.
 
 | Status | When |
 |---|---|
 | 400 | Validation failure (`errors` map), missing refresh cookie, order without payment intent on refund, bad webhook signature |
-| 401 | Missing/invalid/expired JWT, bad credentials, bad/locked OTP, inactive refresh token |
-| 403 | Authenticated but not owner and not `Admin` (`GET /api/orders/{id}`) |
+| 401 | Missing/invalid/expired JWT, bad credentials, bad/locked OTP, inactive refresh token, wrong current password |
+| 403 | Authenticated but not owner and not `Admin` (`GET /api/orders/{id}`); login with unconfirmed email (`Email Not Confirmed`) |
 | 404 | Unknown id (`KeyNotFoundException`), missing enterprise info |
-| 409 | Illegal order-status transition, order/cart state conflicts |
+| 409 | Illegal order-status transition, order/cart state conflicts, invalid/expired confirm/reset token |
+| 423 | Account temporarily locked after ≥ 5 failed logins (`Locked`, 15 min window) |
 | 429 | **Reserved — not emitted yet.** Rate limiting is in progress (wave 2f); clients SHOULD handle 429 with `Retry-After` for forward compatibility |
 | 500 | Unexpected error |
 
@@ -34,9 +35,14 @@ Success bodies are the DTO named per route. Failures use RFC 7807 `ProblemDetail
 
 | Method | Path | Auth | Body | Responses |
 |---|---|---|---|---|
-| POST | `/api/auth/login` | Anonymous | `{ "email": "string", "password": "string", "otpCode?": "string" }` | `200 TokenResponse{accessToken, refreshToken, expiresAt, requiresTwoFactor}` + `refreshToken` HttpOnly/Secure/SameSite=Strict cookie (7 d). If 2FA enabled and no `otpCode`: `200 { requiresTwoFactor: true }` and OTP emailed. `401` bad credentials/OTP |
+| POST | `/api/auth/login` | Anonymous | `{ "email": "string", "password": "string", "otpCode?": "string" }` | `200 TokenResponse{accessToken, refreshToken, expiresAt, requiresTwoFactor}` + `refreshToken` HttpOnly/Secure/SameSite=Strict cookie (7 d). If 2FA enabled and no `otpCode`: `200 { requiresTwoFactor: true }` and OTP emailed. `401` bad credentials/OTP. `403` email unconfirmed. `423` account locked (≥ 5 failures, 15 min) |
 | POST | `/api/auth/refresh-token` | Anonymous (cookie) | — (reads `refreshToken` cookie) | `200 TokenResponse` + rotated cookie (old token revoked, `ReplacedByToken` linked). `400` cookie missing. `401` invalid/inactive/**reuse detected** (reuse revokes all active tokens) |
 | POST | `/api/auth/logout` | Auth | — (reads `refreshToken` cookie) | `200 { message }` + cookie cleared. `400` cookie missing |
+| POST | `/api/auth/confirm-email` | Anonymous | `{ "email": "string", "token": "string" }` | `200 { message }`. `409` invalid/expired token. `400` validation |
+| POST | `/api/auth/resend-confirmation` | Anonymous | `{ "email": "string" }` | ALWAYS `200 { message }` (generic — no enumeration; sends only when registered + unconfirmed) |
+| POST | `/api/auth/change-password` | Auth | `{ "currentPassword": "string", "newPassword": "string" }` (new: min 8, upper+lower+digit, ≠ current) | `200 { message }` + all refresh tokens revoked. `401` wrong current. `400` validation |
+| POST | `/api/auth/forgot-password` | Anonymous | `{ "email": "string" }` | ALWAYS `200 { message }` (generic — no enumeration; stores 1 h token + emails only when registered) |
+| POST | `/api/auth/reset-password` | Anonymous | `{ "email": "string", "token": "string", "newPassword": "string" }` | `200 { message }` + all refresh tokens revoked. `409` invalid/expired token. `400` validation |
 
 ## Users — `api/users` (all **Admin-only**)
 

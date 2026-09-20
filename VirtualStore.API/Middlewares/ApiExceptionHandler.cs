@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
+using VirtualStore.Application.Common;
 
 namespace VirtualStore.API.Middlewares;
 
@@ -40,6 +41,18 @@ public sealed class ApiExceptionHandler : IExceptionHandler
                     .GroupBy(f => string.IsNullOrEmpty(f.PropertyName) ? "general" : f.PropertyName)
                     .ToDictionary(g => g.Key, g => g.Select(f => f.ErrorMessage).ToArray());
                 _logger.LogWarning(exception, "Validation failed. TraceId: {TraceId}", traceId);
+                break;
+            case AccountLockedException:
+                statusCode = StatusCodes.Status423Locked;
+                title = "Locked";
+                detail = "Account is temporarily locked due to too many failed login attempts.";
+                _logger.LogWarning(exception, "Account locked. TraceId: {TraceId}", traceId);
+                break;
+            case EmailNotConfirmedException:
+                statusCode = StatusCodes.Status403Forbidden;
+                title = "Email Not Confirmed";
+                detail = "Email address is not confirmed.";
+                _logger.LogWarning(exception, "Email not confirmed. TraceId: {TraceId}", traceId);
                 break;
             case UnauthorizedAccessException:
                 statusCode = StatusCodes.Status401Unauthorized;
