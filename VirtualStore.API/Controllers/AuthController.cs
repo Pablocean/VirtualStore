@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using VirtualStore.Application.DTOs;
 using VirtualStore.Application.DTOs.Auth;
 using VirtualStore.Application.Interfaces;
@@ -8,6 +9,7 @@ namespace VirtualStore.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[EnableRateLimiting("auth")]
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;

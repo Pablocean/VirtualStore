@@ -2,15 +2,22 @@ using AutoMapper;
 using FluentValidation;
 using FluentValidation.AspNetCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IdentityModel.Tokens;
 using MongoDB.Driver;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 using Quartz;
 using Serilog;
 using Serilog.Extensions.Hosting;
+using System.Globalization;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using VirtualStore.API.Data;
 using VirtualStore.API.Middlewares;
 using VirtualStore.Application.Interfaces;
@@ -102,15 +109,11 @@ public static class ServiceExtensions
                 };
             });
 
-        // CORS
-        services.AddCors(options =>
-        {
-            options.AddPolicy("CorsPolicy", builder =>
-                builder.WithOrigins(config.GetSection("CorsSettings:AllowedOrigins").Get<string[]>()!)
-                       .AllowAnyMethod()
-                       .AllowAnyHeader()
-                       .AllowCredentials());
-        });
+        // ===== BEGIN wave/2f-hardening wiring (implementations live in the Wave 2f region below) =====
+        AddWave2fCors(services, config);
+        AddWave2fRateLimiting(services);
+        AddWave2fOpenTelemetry(services, config);
+        // ===== END wave/2f-hardening wiring =====
 
         var mongoSettings = config.GetSection("MongoDbSettings").Get<MongoDbSettings>()!;
 
@@ -130,6 +133,106 @@ public static class ServiceExtensions
         // For Swagger UI you can use Scalar: app.MapScalarApiReference();
         return services;
     }
+
+    #region Wave 2f - Hardening (ops: CORS guard, rate limiting, OpenTelemetry)
+    // All wave/2f-hardening service registrations live here. Called from AddApplicationServices above.
+
+    private static void AddWave2fCors(IServiceCollection services, IConfiguration config)
+    {
+        // Null-safe origins read with localhost fallback.
+        var allowedOrigins = config.GetSection("CorsSettings:AllowedOrigins").Get<string[]>()
+            ?.Where(o => !string.IsNullOrWhiteSpace(o))
+            .Select(o => o.Trim())
+            .ToArray();
+        if (allowedOrigins is null || allowedOrigins.Length == 0)
+            allowedOrigins = ["http://localhost:3000"];
+
+        // Fail fast: AllowAnyOrigin + AllowCredentials is rejected by the CORS middleware
+        // at runtime — surface the misconfiguration at startup instead.
+        if (allowedOrigins.Any(o => o == "*"))
+            throw new InvalidOperationException(
+                "CORS misconfiguration: wildcard origin '*' cannot be combined with AllowCredentials. " +
+                "Configure explicit origins in CorsSettings:AllowedOrigins.");
+
+        // AllowCredentials is only used with the explicit origin list above (never with AllowAnyOrigin).
+        services.AddCors(options =>
+        {
+            options.AddPolicy("CorsPolicy", builder =>
+                builder.WithOrigins(allowedOrigins)
+                       .AllowAnyMethod()
+                       .AllowAnyHeader()
+                       .AllowCredentials());
+        });
+    }
+
+    private static void AddWave2fRateLimiting(IServiceCollection services)
+    {
+        services.AddRateLimiter(options =>
+        {
+            // RateLimiter short-circuits before the ApiExceptionHandler pipeline, so emit
+            // a ProblemDetails body here to keep the 429 shape consistent.
+            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            options.OnRejected = async (context, cancellationToken) =>
+            {
+                context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+                if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+                    context.HttpContext.Response.Headers.RetryAfter =
+                        ((int)retryAfter.TotalSeconds).ToString(CultureInfo.InvariantCulture);
+
+                var problem = new ProblemDetails
+                {
+                    Status = StatusCodes.Status429TooManyRequests,
+                    Title = "Too Many Requests",
+                    Detail = "Rate limit exceeded. Please retry after a short delay.",
+                    Instance = context.HttpContext.Request.Path
+                };
+                await context.HttpContext.Response.WriteAsJsonAsync(problem, cancellationToken);
+            };
+
+            static RateLimitPartition<string> PerIpSlidingWindow(HttpContext httpContext, int permitLimit) =>
+                RateLimitPartition.GetSlidingWindowLimiter(
+                    partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                    factory: _ => new SlidingWindowRateLimiterOptions
+                    {
+                        PermitLimit = permitLimit,
+                        Window = TimeSpan.FromMinutes(1),
+                        SegmentsPerWindow = 1,
+                        QueueLimit = 0,
+                        AutoReplenishment = true
+                    });
+
+            // "auth": strict per-IP budget for AuthController + StripeWebhookController
+            // (applied via [EnableRateLimiting("auth")] on those controllers).
+            options.AddPolicy("auth", httpContext => PerIpSlidingWindow(httpContext, permitLimit: 5));
+
+            // Global fallback: sliding 100 req/min per IP for everything else.
+            options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(
+                httpContext => PerIpSlidingWindow(httpContext, permitLimit: 100));
+        });
+    }
+
+    private static void AddWave2fOpenTelemetry(IServiceCollection services, IConfiguration config)
+    {
+        var otlpEndpoint = config["Otlp:Endpoint"];
+        var hasOtlpEndpoint = !string.IsNullOrWhiteSpace(otlpEndpoint);
+
+        services.AddOpenTelemetry()
+            .ConfigureResource(resource => resource.AddService(serviceName: "VirtualStore.API"))
+            .WithTracing(tracing =>
+            {
+                tracing.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation();
+                // OTLP export is opt-in: only enabled when Otlp:Endpoint is configured.
+                if (hasOtlpEndpoint)
+                    tracing.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint!));
+            })
+            .WithMetrics(metrics =>
+            {
+                metrics.AddAspNetCoreInstrumentation().AddRuntimeInstrumentation();
+                if (hasOtlpEndpoint)
+                    metrics.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint!));
+            });
+    }
+    #endregion
 
     #region Wave 1b - Validation + ProblemDetails (parallel-wave merge zone: keep wave-1b additions inside this region)
     public static IServiceCollection AddWave1bValidationAndErrors(this IServiceCollection services)

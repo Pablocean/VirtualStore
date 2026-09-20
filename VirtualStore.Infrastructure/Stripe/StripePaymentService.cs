@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Options;
+using Polly;
+using Polly.Retry;
 using Stripe;
 using VirtualStore.Application.DTOs;
 using VirtualStore.Application.Interfaces;
@@ -9,6 +11,29 @@ namespace VirtualStore.Infrastructure.Stripe;
 public class StripePaymentService : IStripePaymentService
 {
     private readonly StripeSettings _settings;
+
+    // Static pipeline (Stripe SDK is used directly, no IHttpClient): retry 2x on transient
+    // Stripe errors (network failure, 408/429/5xx) + 10s per-attempt timeout. Signature
+    // verification (HandleWebhookEventAsync) is CPU-bound and is intentionally not retried.
+    private static readonly ResiliencePipeline _stripePipeline = new ResiliencePipelineBuilder()
+        .AddRetry(new RetryStrategyOptions
+        {
+            MaxRetryAttempts = 2,
+            BackoffType = DelayBackoffType.Exponential,
+            Delay = TimeSpan.FromMilliseconds(500),
+            UseJitter = true,
+            ShouldHandle = new PredicateBuilder().Handle<StripeException>(IsTransientStripeError)
+        })
+        .AddTimeout(TimeSpan.FromSeconds(10))
+        .Build();
+
+    // Stripe.net exposes HttpStatusCode as non-nullable (default 0 when no HTTP
+    // response was received, e.g. network failure) — treat that as transient too.
+    private static bool IsTransientStripeError(StripeException ex) =>
+        ex.HttpStatusCode == default
+        || ex.HttpStatusCode == System.Net.HttpStatusCode.RequestTimeout
+        || ex.HttpStatusCode == (System.Net.HttpStatusCode)429
+        || (int)ex.HttpStatusCode >= 500;
 
     public StripePaymentService(IOptions<StripeSettings> options)
     {
@@ -42,14 +67,18 @@ public class StripePaymentService : IStripePaymentService
                 : new Dictionary<string, string> { ["orderId"] = orderId }
         };
         var service = new PaymentIntentService(CreateClient());
-        var intent = await service.CreateAsync(options, cancellationToken: cancellationToken);
+        var intent = await _stripePipeline.ExecuteAsync(
+            async ct => await service.CreateAsync(options, cancellationToken: ct),
+            cancellationToken);
         return ToResult(intent);
     }
 
     public async Task<bool> ConfirmPaymentAsync(string paymentIntentId, CancellationToken cancellationToken = default)
     {
         var service = new PaymentIntentService(CreateClient());
-        var paymentIntent = await service.GetAsync(paymentIntentId, cancellationToken: cancellationToken);
+        var paymentIntent = await _stripePipeline.ExecuteAsync(
+            async ct => await service.GetAsync(paymentIntentId, cancellationToken: ct),
+            cancellationToken);
         return paymentIntent.Status == "succeeded";
     }
 
@@ -63,7 +92,9 @@ public class StripePaymentService : IStripePaymentService
             options.Amount = ToMinorUnits(amount.Value);
 
         var service = new RefundService(CreateClient());
-        var refund = await service.CreateAsync(options, cancellationToken: cancellationToken);
+        var refund = await _stripePipeline.ExecuteAsync(
+            async ct => await service.CreateAsync(options, cancellationToken: ct),
+            cancellationToken);
         return new PaymentIntentResultDto
         {
             PaymentIntentId = refund.PaymentIntentId ?? paymentIntentId,
