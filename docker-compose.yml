@@ -1,6 +1,8 @@
 services:
   mongo:
-    image: mongo:7.0
+    # Single-node replica set: required for multi-document transactions (Epic A1).
+    # mongodb-community-server boots with --replSet by default, unlike plain mongo image.
+    image: mongodb/mongodb-community-server:7.0-ubuntu2204
     restart: unless-stopped
     ports:
       - "27017:27017"
