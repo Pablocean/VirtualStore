@@ -134,7 +134,9 @@ VirtualStore/
 ### Full Tree
 
 ```text
-VirtualStore.sln
+VirtualStore.slnx
+├── AGENTS.md / CONTEXT.md          # contributor guide / domain language
+├── docs/                           # API, ARCHITECTURE, SECURITY, OPERATIONS, TESTING, ADRs/
 ├── VirtualStore.Domain/
 │   ├── Entities/
 │   │   ├── BaseEntity.cs
@@ -157,62 +159,72 @@ VirtualStore.sln
 │       └── StripeSettings.cs
 ├── VirtualStore.Application/
 │   ├── Common/
-│   │   └── PagedResult.cs
+│   │   ├── PagedResult.cs
+│   │   └── TokenClaimTypes.cs
 │   ├── DTOs/
 │   │   ├── Auth/
 │   │   ├── UserDtos.cs
 │   │   ├── ProductDtos.cs
-│   │   ├── CategoryDto.cs
+│   │   ├── CategoryDto.cs / CreateCategoryDto.cs / UpdateCategoryDto.cs / CategoryFilterDto.cs
 │   │   ├── CartDtos.cs
 │   │   ├── OrderDtos.cs
+│   │   ├── StripeDtos.cs
 │   │   └── EnterpriseInfoDtos.cs
 │   ├── Interfaces/
 │   │   ├── IAuthService.cs
 │   │   ├── ITokenService.cs
 │   │   ├── IUserService.cs
 │   │   ├── IProductService.cs
+│   │   ├── ICategoryService.cs
 │   │   ├── ICartService.cs
 │   │   ├── IOrderService.cs
 │   │   ├── IEnterpriseInfoService.cs
 │   │   ├── IEmailService.cs
 │   │   ├── IStripePaymentService.cs
-│   │   └── ICacheService.cs
+│   │   ├── ICacheService.cs
+│   ├── Validators/                  # 13 FluentValidators (Login, Create/Update *, cart, order, address)
 │   └── Mappings/
 │       └── MappingProfile.cs
 ├── VirtualStore.Infrastructure/
 │   ├── BackgroundServices/
 │   │   └── RefreshTokenCleanupJob.cs
 │   ├── Data/
-│   │   └── MongoDbContext.cs
+│   │   └── MongoDbContext.cs        # EnsureIndexesAsync: ux_user_email, ux_cart_userId, ix_order_userId, ix_product_categoryId, ix_category_parentCategoryId
 │   ├── Email/
 │   │   └── EmailService.cs
 │   ├── Repositories/
 │   │   └── MongoRepository.cs
 │   ├── Services/
-│   │   ├── AuthService.cs
-│   │   ├── TokenService.cs
+│   │   ├── AuthService.cs           # reuse detection, OTP (5 attempts / 10 min)
+│   │   ├── TokenService.cs          # sub + NameIdentifier + role claims
 │   │   ├── UserService.cs
 │   │   ├── ProductService.cs
+│   │   ├── CategoryService.cs
 │   │   ├── CartService.cs
-│   │   ├── OrderService.cs
+│   │   ├── OrderService.cs          # server-side pricing + status machine
 │   │   ├── EnterpriseInfoService.cs
 │   │   └── CacheService.cs
 │   └── Stripe/
-│       └── StripePaymentService.cs
+│       └── StripePaymentService.cs  # intents, refunds, webhook verification
 └── VirtualStore.API/
     ├── Controllers/
     │   ├── AuthController.cs
-    │   ├── UsersController.cs
+    │   ├── UsersController.cs       # Admin-only
     │   ├── ProductsController.cs
+    │   ├── CategoriesController.cs
     │   ├── CartController.cs
     │   ├── OrdersController.cs
-    │   └── EnterpriseInfoController.cs
+    │   ├── EnterpriseInfoController.cs
+    │   ├── PaymentsController.cs
+    │   └── StripeWebhookController.cs
     ├── Data/
     │   └── DatabaseSeeder.cs
     ├── Extensions/
     │   └── ServiceExtensions.cs
     ├── Middlewares/
-    │   └── ErrorHandlingMiddleware.cs
+    │   └── ApiExceptionHandler.cs   # RFC 7807 ProblemDetails + traceId
+    ├── OpenApi/
+    │   └── BearerSecuritySchemeTransformer.cs  # Scalar Authorize button (dev-only)
     ├── appsettings.json
     ├── .env (example)
     └── Program.cs
@@ -347,45 +359,65 @@ The Scalar UI supports setting the JWT token via the padlock icon.
 - **Manager** – same as Customer + manage products/categories
 - **Admin** – full CRUD over users, enterprise info, and all resources
 
+> Permission note: the **Users endpoints are Admin-only** — there is no public
+> self-service registration. Every route under `/api/users` requires the `Admin` role.
+
 ---
 
 ## 📡 API Endpoints Overview
 
+32 routes (31 controller endpoints + `GET /health`). Failures use RFC 7807
+`ProblemDetails` with a `traceId` extension (`400` validation + `errors` map,
+`401`, `403` non-owner order access, `404`, `409` illegal order transition,
+`500`; `429` reserved for the in-progress wave-2f rate limiting).
+
 | Method | Endpoint | Roles | Description |
 |---|---|---|---|
-| POST | `/api/auth/login` | Anonymous | Login, get tokens |
-| POST | `/api/auth/refresh-token` | Anonymous (cookie) | Rotate refresh token |
+| POST | `/api/auth/login` | Anonymous | Login, get tokens (OTP step if 2FA enabled) |
+| POST | `/api/auth/refresh-token` | Anonymous (cookie) | Rotate refresh token (reuse detected → all revoked) |
 | POST | `/api/auth/logout` | Authenticated | Revoke refresh token |
-| GET | `/api/users` | Admin | List users |
+| GET | `/api/users` | Admin | List users (paged, filterable) |
 | POST | `/api/users` | Admin | Create a new user |
-| ... | ... | ... | ... |
-| GET | `/api/products` | Anonymous | List products (filterable) |
+| PUT | `/api/users/{id}` | Admin | Update a user |
+| DELETE | `/api/users/{id}` | Admin | Delete a user |
+| GET | `/api/products` | Anonymous | List products (filterable, paged) |
 | GET | `/api/products/{id}` | Anonymous | Get product details |
 | POST | `/api/products` | Admin, Manager | Create a product |
 | PUT | `/api/products/{id}` | Admin, Manager | Update a product |
 | DELETE | `/api/products/{id}` | Admin | Delete a product |
 | GET | `/api/cart` | Authenticated | Get current user's cart |
 | POST | `/api/cart/items` | Authenticated | Add item to cart |
-| PUT | `/api/cart/items/{prodId}` | Authenticated | Update item quantity |
+| PUT | `/api/cart/items/{prodId}` | Authenticated | Update item quantity (raw JSON number body) |
 | DELETE | `/api/cart/items/{prodId}` | Authenticated | Remove item from cart |
 | DELETE | `/api/cart` | Authenticated | Clear cart |
-| POST | `/api/orders` | Authenticated | Place an order |
-| GET | `/api/orders/{id}` | Authenticated | Get order details |
-| GET | `/api/orders/my` | Authenticated | List user's orders |
-| GET/PUT | `/api/enterprise-info` | Admin (write), Anon (read) | Manage company information |
+| POST | `/api/orders` | Authenticated | Place an order (server-side pricing) |
+| GET | `/api/orders/my` | Authenticated | List user's orders (paged) |
+| GET | `/api/orders/{id}` | Authenticated (owner/Admin) | Get order details |
+| PATCH | `/api/orders/{id}/status` | Admin | Transition order status (guarded machine) |
+| GET | `/api/enterprise-info` | Anonymous | Get company information |
+| PUT | `/api/enterprise-info` | Admin | Create/update company information |
+| POST | `/api/payments/intent` | Authenticated | Create a Stripe payment intent |
+| POST | `/api/payments/orders/{id}/refund` | Admin | Refund an order's payment (full/partial) |
+| POST | `/api/stripe/webhook` | Anonymous (Stripe signature) | Stripe event receiver, mirrors payment state to orders |
+| GET | `/api/categories` | Anonymous | List categories (paged) |
+| GET | `/api/categories/{id}` | Anonymous | Get category details |
+| POST | `/api/categories` | Admin, Manager | Create a category |
+| PUT | `/api/categories/{id}` | Admin, Manager | Update a category |
+| DELETE | `/api/categories/{id}` | Admin | Soft-delete a category |
 | GET | `/health` | Anonymous | Health check (MongoDB included) |
 
-Full details are available in the Scalar UI.
+Full details (bodies, response codes) are available in the Scalar UI and in [`docs/API.md`](docs/API.md).
 
 ---
 
 ## 💳 Stripe Integration
 
-The service creates a **PaymentIntent** via the Stripe API.
-
-After checkout, the order status is updated.
-
-A webhook endpoint can be added to confirm payments asynchronously (see `StripePaymentService.cs`).
+The service creates a **PaymentIntent** via the Stripe API (`POST /api/payments/intent`,
+amount in minor units, `orderId` in metadata). The client confirms with the returned
+`clientSecret`; Stripe then calls `POST /api/stripe/webhook` (signature verified with
+`WebhookSecret`), which mirrors the result into the order (`PaymentReceived` on
+`payment_intent.succeeded`, `Cancelled` on failure/refund). Admins can refund via
+`POST /api/payments/orders/{id}/refund` (full or partial). See `StripePaymentService.cs`.
 
 Configure your Stripe test keys in `.env`:
 
@@ -399,19 +431,23 @@ StripeSettings__WebhookSecret=whsec_...
 
 ## 🧪 Testing
 
-We recommend the following test tools and strategies:
+Test suites live under `tests/` (owned by wave 2e — see [`docs/TESTING.md`](docs/TESTING.md)
+for the full contract):
 
-- **Unit Tests:** xUnit + Moq for services and AutoMapper profiles.
-- **Integration Tests:** WebApplicationFactory with a real MongoDB test container (Testcontainers for MongoDB).
-- **Performance:** Use k6 or NBomber to load test endpoints.
+- **Unit tests** (no containers): services (mocked `IRepository<T>`), the 13
+  FluentValidators, `UserRoles`, `PagedResult`, AutoMapper profile, order status machine.
+- **Integration tests** (trait-gated, **require Docker/Testcontainers for MongoDB**):
+  controllers via `WebApplicationFactory` — happy paths, auth matrix
+  (anonymous → 401, wrong role → 403), and `ProblemDetails` shape incl. `traceId`.
 
-Run tests:
+Run:
 
 ```bash
-dotnet test
+dotnet build VirtualStore.slnx -c Release   # 0-errors gate
+dotnet test VirtualStore.slnx -c Release    # unit gate (no containers needed)
+# Full matrix with integration tests (needs Docker):
+dotnet test VirtualStore.slnx -c Release --filter "Category=Integration"
 ```
-
-> Tests are not yet included, but they can be added following the layered architecture.
 
 ---
 

@@ -27,6 +27,8 @@ try
 
     builder.Services.AddApplicationServices(builder.Configuration);
     builder.Services.AddSwaggerDocumentation();
+    if (builder.Environment.IsDevelopment())
+        builder.Services.AddDevOpenApiJwtSecurity(); // Scalar Authorize button (dev-only)
     builder.Services.AddControllers();
     builder.Services.AddWave1bValidationAndErrors();
 
