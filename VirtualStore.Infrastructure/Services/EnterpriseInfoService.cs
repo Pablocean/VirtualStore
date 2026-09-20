@@ -17,15 +17,17 @@ public class EnterpriseInfoService : IEnterpriseInfoService
         _mapper = mapper;
     }
 
-    public async Task<EnterpriseInfoDto?> GetEnterpriseInfoAsync()
+    public async Task<EnterpriseInfoDto?> GetEnterpriseInfoAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var info = await _infoRepo.GetAllAsync();
         var entity = info.FirstOrDefault(); // singleton: always first
         return entity == null ? null : _mapper.Map<EnterpriseInfoDto>(entity);
     }
 
-    public async Task<EnterpriseInfoDto> UpdateEnterpriseInfoAsync(UpdateEnterpriseInfoDto dto)
+    public async Task<EnterpriseInfoDto> UpdateEnterpriseInfoAsync(UpdateEnterpriseInfoDto dto, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var infoList = await _infoRepo.GetAllAsync();
         var info = infoList.FirstOrDefault();
         if (info == null)

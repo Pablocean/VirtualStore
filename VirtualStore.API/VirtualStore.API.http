@@ -1,6 +1,142 @@
 @VirtualStore.API_HostAddress = http://localhost:5293
 
-GET {{VirtualStore.API_HostAddress}}/weatherforecast/
+### Create an order (server-side pricing, stock checked; 201 on success)
+POST {{VirtualStore.API_HostAddress}}/api/orders
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "items": [
+    { "productId": "PRODUCT_ID_HERE", "productName": "IgnoredByServer", "unitPrice": 0.01, "quantity": 2 }
+  ],
+  "shippingAddress": {
+    "street": "123 Main St",
+    "city": "Springfield",
+    "state": "IL",
+    "zipCode": "62701",
+    "country": "USA"
+  }
+}
+
+### Create an order with empty cart items (error path -> 400/409)
+POST {{VirtualStore.API_HostAddress}}/api/orders
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "items": [],
+  "shippingAddress": {
+    "street": "123 Main St",
+    "city": "Springfield",
+    "state": "IL",
+    "zipCode": "62701",
+    "country": "USA"
+  }
+}
+
+### Get my orders, paged
+GET {{VirtualStore.API_HostAddress}}/api/orders/my?pageNumber=1&pageSize=20
+Authorization: Bearer {{token}}
+
+### Get one order (owner or admin; others -> 403, unknown id -> 404)
+GET {{VirtualStore.API_HostAddress}}/api/orders/ORDER_ID_HERE
+Authorization: Bearer {{token}}
+
+### Update order status (Admin only; illegal transition -> 409/500, unknown id -> 404)
+PATCH {{VirtualStore.API_HostAddress}}/api/orders/ORDER_ID_HERE/status
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{
+  "status": "Processing"
+}
+
+### Get enterprise info (anonymous)
+GET {{VirtualStore.API_HostAddress}}/api/enterprise-info
 Accept: application/json
+
+### Update enterprise info (Admin only)
+PUT {{VirtualStore.API_HostAddress}}/api/enterprise-info
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{
+  "companyName": "VirtualStore Inc.",
+  "address": "123 Commerce St, Springfield, IL",
+  "phone": "+1-555-0100",
+  "email": "info@virtualstore.example",
+  "aboutUs": "Demo storefront."
+}
+
+### Create a payment intent (authenticated)
+POST {{VirtualStore.API_HostAddress}}/api/payments/intent
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "amount": 49.99,
+  "currency": "usd",
+  "orderId": "ORDER_ID_HERE"
+}
+
+### Refund an order payment (Admin only; order without payment -> 400, unknown id -> 404)
+POST {{VirtualStore.API_HostAddress}}/api/payments/orders/ORDER_ID_HERE/refund
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{
+  "amount": 49.99
+}
+
+### Full refund (no body amount)
+POST {{VirtualStore.API_HostAddress}}/api/payments/orders/ORDER_ID_HERE/refund
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{}
+
+### Stripe webhook (anonymous; bad signature -> 400)
+POST {{VirtualStore.API_HostAddress}}/api/stripe/webhook
+Content-Type: application/json
+Stripe-Signature: t=1492774577,v1=INVALID_SIGNATURE_FOR_TESTING
+
+{
+  "id": "evt_test_123",
+  "object": "event",
+  "type": "payment_intent.succeeded"
+}
+
+### List categories, paged (anonymous)
+GET {{VirtualStore.API_HostAddress}}/api/categories?pageNumber=1&pageSize=20
+Accept: application/json
+
+### Get category by id (unknown id -> 404)
+GET {{VirtualStore.API_HostAddress}}/api/categories/CATEGORY_ID_HERE
+Accept: application/json
+
+### Create a category (Admin/Manager only)
+POST {{VirtualStore.API_HostAddress}}/api/categories
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{
+  "name": "Electronics",
+  "description": "Gadgets and devices"
+}
+
+### Update a category (Admin/Manager only; unknown id -> 404)
+PUT {{VirtualStore.API_HostAddress}}/api/categories/CATEGORY_ID_HERE
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{
+  "name": "Electronics & Gadgets",
+  "description": "Updated description",
+  "isActive": true
+}
+
+### Delete a category (Admin only -> 204, unknown id -> 404)
+DELETE {{VirtualStore.API_HostAddress}}/api/categories/CATEGORY_ID_HERE
+Authorization: Bearer {{adminToken}}
 
 ###

@@ -10,6 +10,7 @@ public class OrderDto
     public decimal TotalAmount { get; set; }
     public string Currency { get; set; } = "usd";
     public OrderStatus Status { get; set; }
+    public string? StripePaymentIntentId { get; set; }
     public AddressDto ShippingAddress { get; set; } = new();
     public DateTime CreatedAt { get; set; }
 }
@@ -36,4 +37,9 @@ public class CreateOrderDto
     public List<OrderItemDto> Items { get; set; } = new();
     public AddressDto ShippingAddress { get; set; } = new();
     public string? StripePaymentMethodId { get; set; } // Optional for Stripe
+}
+
+public class UpdateOrderStatusDto
+{
+    public OrderStatus Status { get; set; }
 }
