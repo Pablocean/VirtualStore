@@ -1,4 +1,6 @@
 using dotenv.net;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.RateLimiting;
 using Scalar.AspNetCore;
 using Serilog;
 using VirtualStore.API.Extensions;
@@ -19,6 +21,7 @@ try
     // Basic logging before host build
     Log.Logger = new LoggerConfiguration()
         .ReadFrom.Configuration(builder.Configuration)
+        .Enrich.FromLogContext()
         .CreateLogger();
     builder.Host.UseSerilog();
 
@@ -38,19 +41,22 @@ try
         app.MapScalarApiReference();
     }
 
-    // Inline request logging instead of UseSerilogRequestLogging()
-    app.Use(async (context, next) =>
+    // Structured request logging (Serilog) with TraceIdentifier correlation.
+    app.UseSerilogRequestLogging(options =>
     {
-        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
-        logger.LogInformation("HTTP {Method} {Path}", context.Request.Method, context.Request.Path);
-        await next();
+        options.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms {TraceIdentifier}";
+        options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+            diagnosticContext.Set("TraceIdentifier", httpContext.TraceIdentifier);
     });
 
     app.UseHttpsRedirection();
     app.UseCors("CorsPolicy");
+    app.UseRateLimiter();
     app.UseAuthentication();
     app.UseAuthorization();
-    app.MapHealthChecks("/health");
+    app.MapHealthChecks("/health").DisableRateLimiting();
+    // Liveness probe: no checks, always Healthy ("self"). /health stays the readiness endpoint.
+    app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false }).DisableRateLimiting();
     app.MapControllers();
 
     // Ensure MongoDB indexes (non-fatal)

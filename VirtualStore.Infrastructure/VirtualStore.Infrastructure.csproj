@@ -7,6 +7,7 @@
 	<ItemGroup>
 		<!-- JWT/Identity packages aligned with the API's JwtBearer version -->
 		<PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.14.0" />
+		<PackageReference Include="Polly" Version="8.8.0" />
 		<PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.14.0" />
 
 		<!-- Core dependencies -->

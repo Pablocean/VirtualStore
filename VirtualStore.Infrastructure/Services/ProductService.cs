@@ -13,16 +13,22 @@ public class ProductService : IProductService
     private readonly IRepository<Product> _productRepo;
     private readonly IRepository<Category> _categoryRepo;
     private readonly IMapper _mapper;
+    private readonly ICacheService _cache;
 
-    public ProductService(IRepository<Product> productRepo, IRepository<Category> categoryRepo, IMapper mapper)
+    public ProductService(IRepository<Product> productRepo, IRepository<Category> categoryRepo, IMapper mapper, ICacheService cache)
     {
         _productRepo = productRepo;
         _categoryRepo = categoryRepo;
         _mapper = mapper;
+        _cache = cache;
     }
 
     public async Task<ProductDto?> GetProductByIdAsync(string id)
     {
+        var cacheKey = $"product:{id}";
+        if (_cache.TryGet<ProductDto>(cacheKey, out var cached) && cached is not null)
+            return cached;
+
         var product = await _productRepo.GetByIdAsync(id);
         if (product == null) return null;
 
@@ -32,6 +38,9 @@ public class ProductService : IProductService
             var cat = await _categoryRepo.GetByIdAsync(product.CategoryId);
             dto.CategoryName = cat?.Name;
         }
+
+        // CacheService default: 5min sliding expiration. Nulls are not cached.
+        _cache.Set(cacheKey, dto);
         return dto;
     }
 
@@ -83,6 +92,7 @@ public class ProductService : IProductService
     {
         var product = _mapper.Map<Product>(dto);
         await _productRepo.AddAsync(product);
+        // New id: nothing cached under product:{newId}, so no invalidation needed.
         return _mapper.Map<ProductDto>(product);
     }
 
@@ -91,6 +101,7 @@ public class ProductService : IProductService
         var product = await _productRepo.GetByIdAsync(id) ?? throw new KeyNotFoundException("Product not found");
         _mapper.Map(dto, product);
         await _productRepo.UpdateAsync(id, product);
+        _cache.Remove($"product:{id}");
         return _mapper.Map<ProductDto>(product);
     }
 
@@ -98,6 +109,7 @@ public class ProductService : IProductService
     {
         var product = await _productRepo.GetByIdAsync(id) ?? throw new KeyNotFoundException("Product not found");
         await _productRepo.DeleteAsync(id);
+        _cache.Remove($"product:{id}");
     }
 
     private static Expression<Func<Product, bool>> BuildPredicate(ProductFilterDto filter)

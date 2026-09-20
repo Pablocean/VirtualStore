@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Stripe;
 using VirtualStore.Application.DTOs;
 using VirtualStore.Application.Interfaces;
@@ -10,6 +11,7 @@ namespace VirtualStore.API.Controllers;
 /// <summary>Stripe webhook receiver. Verifies the signature and mirrors payment state into orders.</summary>
 [ApiController]
 [Route("api/stripe/webhook")]
+[EnableRateLimiting("auth")]
 public class StripeWebhookController : ControllerBase
 {
     private readonly IStripePaymentService _paymentService;
