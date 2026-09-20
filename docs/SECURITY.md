@@ -76,5 +76,5 @@
 ## Residual risks (accepted / queued)
 
 - Refresh tokens stored server-side in clear text — DB read = session hijack; accepted (Mongo access = full compromise anyway), mitigated by reuse detection + short access lifetime.
-- Rate limiting & lockout on login/OTP endpoints are **in progress (wave 2f)** — currently only OTP attempt-count throttles exist. Do not expose the API to the open internet without the wave-2f limiters.
-- Centralized audit logging / OpenTelemetry tracing likewise **in progress (wave 2f)**.
+- Rate limiting is enforced per IP (`auth` 5/min, `webhook` 60/min, global 100/min; `429` ProblemDetails with `Retry-After`) plus per-account login lockout (5 failures → 15 min `423`). Do not expose the API to the open internet without these (reverse-proxy throttling as defense in depth).
+- Centralized audit logging is still queued; OpenTelemetry tracing/metrics are wired with opt-in OTLP export.

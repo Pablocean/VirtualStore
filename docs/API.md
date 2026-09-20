@@ -28,7 +28,7 @@ Success bodies are the DTO named per route. Failures use RFC 7807 `ProblemDetail
 | 404 | Unknown id (`KeyNotFoundException`), missing enterprise info |
 | 409 | Illegal order-status transition, order/cart state conflicts, invalid/expired confirm/reset token |
 | 423 | Account temporarily locked after ≥ 5 failed logins (`Locked`, 15 min window) |
-| 429 | **Reserved — not emitted yet.** Rate limiting is in progress (wave 2f); clients SHOULD handle 429 with `Retry-After` for forward compatibility |
+| 429 | Rate limited (`auth` 5/min, `webhook` 60/min, global 100/min per IP; `Retry-After` header) |
 | 500 | Unexpected error |
 
 ## Auth — `api/auth`

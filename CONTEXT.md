@@ -16,17 +16,19 @@ Bootstrap admin carries all three roles (`DatabaseSeeder`). `Manager` cannot tou
 
 ## Order lifecycle (status machine)
 
-`OrderStatus`: `Pending → PaymentReceived → Processing → Shipped → Delivered`, with `Cancelled` as a terminal escape from `Pending`, `PaymentReceived`, `Processing` only. Full matrix (`OrderService.AllowedTransitions`):
+`OrderStatus`: `Pending → PaymentReceived → Processing → Shipped → Delivered`, with `Cancelled` as a terminal escape from `Pending`, `PaymentReceived`, `Processing` only, plus refund states (`Refunded`, `PartiallyRefunded`). Full matrix (`OrderService.AllowedTransitions`):
 
 | From | To (allowed) |
 |---|---|
 | `Pending` | `PaymentReceived`, `Cancelled` |
-| `PaymentReceived` | `Processing`, `Cancelled` |
-| `Processing` | `Shipped`, `Cancelled` |
-| `Shipped` | `Delivered` |
-| `Delivered`, `Cancelled` | — (terminal) |
+| `PaymentReceived` | `Processing`, `Cancelled`, `Refunded`, `PartiallyRefunded` |
+| `Processing` | `Shipped`, `Cancelled`, `Refunded`, `PartiallyRefunded` |
+| `Shipped` | `Delivered`, `PartiallyRefunded` (full refund only via partial first — `Shipped → Refunded` is absent) |
+| `PartiallyRefunded` | `Refunded` (one partial per order — no `PartiallyRefunded → PartiallyRefunded`) |
+| `Delivered` | `Refunded` |
+| `Delivered`, `Cancelled`, `Refunded` | — (terminal) |
 
-Rules: orders are created `Pending` with **server-side pricing** (each `UnitPrice` re-read from `Product`, stock validated + decremented, cart deleted only after the order insert). Only `Admin` may `PATCH /api/orders/{id}/status`; illegal transitions throw `InvalidOperationException` → `409 Conflict`. Owners see own orders; `Admin` may fetch any (`GET /api/orders/{id}` returns `403` for non-owner non-admin).
+Rules: orders are created `Pending` with **server-side pricing** (each `UnitPrice` re-read from `Product`, stock validated + decremented, cart deleted only after the order insert) inside a replica-set transaction (`TransactAsync`); replays with the same `Idempotency-Key` header return the existing order, same key with a different payload → `409`. Only `Admin` may `PATCH /api/orders/{id}/status`; illegal transitions throw `InvalidOperationException` → `409 Conflict`. Owners see own orders; `Admin` may fetch any (`GET /api/orders/{id}` returns `403` for non-owner non-admin).
 
 ## Cart model
 
@@ -41,17 +43,27 @@ One `Cart` per user (unique index `ux_cart_userId` on `Cart.UserId`). `Cart.Item
    - `payment_intent.succeeded` → order → `PaymentReceived`
    - `payment_intent.payment_failed` / `charge.refunded` → order → `Cancelled`
    - unknown types → acknowledged (`200`) with `succeeded: false`, no state change
-5. `Admin` may `POST /api/payments/orders/{id}/refund` (full or partial `amount`) — requires a stored `StripePaymentIntentId`, else `400`.
+ 5. `Admin` may `POST /api/payments/orders/{id}/refund` (full or partial `amount`, deterministic idempotency key `order:{id}:refund:{amount ?? "full"}`) — requires a stored `StripePaymentIntentId`, else `400`. Full refund → order `Refunded` + stock restored; partial → `PartiallyRefunded`, no stock restore (a partial is a discount/adjustment on kept goods, not a return).
 
-Webhook rule: always answer `200`, even if the order transition fails (logged, not re-thrown).
+Webhook rule: always answer `200`, even if the order transition fails (logged, not re-thrown). Redelivered Stripe event ids are deduped (`ProcessedWebhookEvent`, 30-day window) and acked with no state change. Note: `charge.refunded` webhooks still map to `Cancelled` (legacy); refund-driven `Refunded`/`PartiallyRefunded` transitions go through the refund endpoint.
 
 ## Cache / TTL
 
-`ICacheService` over `IMemoryCache`: `Set(key, value, expiration?)` uses absolute expiration when given, otherwise **5-minute sliding**. Current uses: email OTP codes (`otp_{email}` — 10 min absolute) and OTP attempt counters (`otp_attempts_{email}` — 10 min window, lockout at 5). Keys are lowercase-email normalized. No distributed cache — single-instance semantics (see ADR 0005).
+`ICacheService` over `HybridCache` (in-memory L1, shared Redis L2 when `Redis__ConnectionString` is set): `Set(key, value, expiration?)` uses absolute expiration when given, otherwise **5-minute absolute** default. OTP codes (`otp_{email}` — 10 min absolute), OTP attempt counters (`otp_attempts_{email}` — 10 min window, lockout at 5), email-confirm (`emailconfirm_{userId}`, 24 h, single-use) and password-reset (`pwdreset_{email}`, 1 h, single-use) tokens live on `IDistributedCache` (in-process default, shared when Redis is set). Keys are lowercase normalized. See ADR 0011 (supersedes the single-instance limits of ADR 0005).
+
+## Auth lifecycle
+
+Login order: lockout → password → email-confirmed → 2FA → tokens. ≥ 5 bad passwords sets `LockoutEnd = +15 min` (that attempt still `401`; the next returns `423 Locked`); success resets. Unconfirmed email → `403 "Email Not Confirmed"`. Lifecycle endpoints: `confirm-email` / `resend-confirmation` (always 200, no enumeration) / `change-password` (auth, revokes all sessions) / `forgot-password` (always 200) / `reset-password` (revokes all sessions). Shared password rule: min 8, upper + lower + digit.
+
+## Token retention & GDPR purge
+
+At most **10 active** refresh tokens per user — logging in with 10 active revokes the oldest (`ReplacedByToken` linked). Nightly cleanup purges expired-never-revoked tokens and expired tokens revoked **older than 90 days**; revoked-within-90d tokens are kept as reuse-detection evidence.
+
+`POST /api/me/purge {confirmPassword}` (BCrypt-verified) is **GDPR erasure**: hard-deletes the user (`HardDeleteAsync`, bypassing soft-delete), deletes carts, pseudonymizes orders (`UserId → "deleted:{sha256hex}"`, address emptied, items/totals/status kept), clears OTP/confirm/reset cache keys. Purge is **not transactional** across collections — the user doc is deleted last so a crash mid-purge converges on retry. Admin `DELETE /api/users/{id}` stays a soft-delete (`IsDeleted` flag, data retained).
 
 ## Jobs
 
-`RefreshTokenCleanupJob` (Quartz, `[DisallowConcurrentExecution]`, cron `0 0 3 * * ?` — daily 03:00 AM): removes expired, not-yet-revoked refresh tokens from every user and bumps `UpdatedAt`. Non-destructive: revoked-but-unexpired tokens are kept for reuse-detection forensics.
+`RefreshTokenCleanupJob` (Quartz, `[DisallowConcurrentExecution]`, cron `0 0 3 * * ?` — daily 03:00 AM): removes expired-never-revoked refresh tokens and expired tokens revoked older than 90 days from every user and bumps `UpdatedAt`. Non-destructive: revoked-within-90d tokens are kept for reuse-detection forensics.
 
 ## Money & identifiers
 
