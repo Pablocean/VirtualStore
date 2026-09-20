@@ -22,12 +22,21 @@ public class OrdersController : ControllerBase
     private string UserId => User.FindFirstValue(ClaimTypes.NameIdentifier)!;
 
     /// <summary>Creates a new order for the current user. Prices are re-computed server-side.</summary>
+    /// <remarks>
+    /// Idempotency: send <c>Idempotency-Key</c> to make retries safe. The header wins
+    /// over <c>CreateOrderDto.IdempotencyKey</c>. Same (user, key) replays return the
+    /// existing order with 201; same key with a different payload is a 409.
+    /// </remarks>
     [HttpPost]
     [ProducesResponseType(typeof(OrderDto), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> CreateOrder([FromBody] CreateOrderDto dto, CancellationToken cancellationToken)
     {
+        if (Request.Headers.TryGetValue("Idempotency-Key", out var headerKey)
+            && !string.IsNullOrWhiteSpace(headerKey.ToString()))
+            dto.IdempotencyKey = headerKey.ToString().Trim();
+
         var order = await _orderService.CreateOrderAsync(UserId, dto, cancellationToken);
         return CreatedAtAction(nameof(GetOrder), new { id = order.Id }, order);
     }
