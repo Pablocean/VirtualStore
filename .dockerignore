@@ -1,0 +1,9 @@
+**/.worktrees/
+bin/
+obj/
+out/
+.env
+Logs/
+*.user
+.vs/
+.idea/

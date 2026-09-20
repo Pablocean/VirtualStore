@@ -1,0 +1,35 @@
+services:
+  mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      MongoDbSettings__ConnectionString: mongodb://mongo:27017
+      MongoDbSettings__DatabaseName: VirtualStoreDb
+      # Provide JwtSettings__Secret, EmailSettings__*, StripeSettings__* and
+      # DatabaseSeeder__* via environment or a .env file (see .env.example).
+    env_file:
+      - .env
+
+volumes:
+  mongo-data:

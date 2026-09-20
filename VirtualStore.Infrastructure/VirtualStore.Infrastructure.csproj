@@ -10,7 +10,7 @@
 		<PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.14.0" />
 
 		<!-- Core dependencies -->
-		<PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
+		<PackageReference Include="BCrypt.Net-Next" Version="4.1.0" />
 		<PackageReference Include="MailKit" Version="4.11.0" />
 		<PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.7" />
 		<PackageReference Include="MongoDB.Driver" Version="3.2.1" />
