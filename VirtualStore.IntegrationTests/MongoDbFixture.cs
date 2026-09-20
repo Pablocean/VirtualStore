@@ -4,7 +4,9 @@ using Xunit;
 namespace VirtualStore.IntegrationTests;
 
 /// <summary>
-/// Starts a MongoDB Testcontainer (mongo:7.0) when Docker is available.
+/// Starts a single-node replica-set MongoDB Testcontainer
+/// (mongodb-community-server, required for multi-document transactions)
+/// when Docker is available.
 /// When Docker is unavailable, initialization swallows the failure and
 /// <see cref="IsAvailable"/> stays false so tests SKIP gracefully.
 /// </summary>
@@ -21,7 +23,7 @@ public sealed class MongoDbFixture : IAsyncLifetime
         try
         {
             _container = new MongoDbBuilder()
-                .WithImage("mongo:7.0")
+                .WithImage("mongodb/mongodb-community-server:7.0-ubuntu2204")
                 .Build();
             await _container.StartAsync();
         }

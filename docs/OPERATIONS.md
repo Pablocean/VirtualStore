@@ -32,11 +32,20 @@ Scalar UI: `https://localhost:7038/scalar/v1` (Development only, Authorize butto
 
 ## docker-compose
 
-`docker-compose.yml` runs `mongo:7.0` (health-checked via `mongosh ping`, persisted in `mongo-data` volume) + `api` (built from `Dockerfile`, port `8080`, `ASPNETCORE_ENVIRONMENT=Production`, Mongo pointed at `mongo:27017`, secrets from `.env` via `env_file`).
+`docker-compose.yml` runs `mongodb/mongodb-community-server:7.0-ubuntu2204` as a single-node replica set (health-checked via `mongosh ping`, persisted in `mongo-data` volume) + `api` (built from `Dockerfile`, port `8080`, `ASPNETCORE_ENVIRONMENT=Production`, Mongo pointed at `mongo:27017`, secrets from `.env` via `env_file`).
 
 ```bash
 docker compose up --build
 ```
+
+## MongoDB replica set (required for transactions)
+
+Multi-document transactions (Epic A1: order checkout, stock decrement) fail on a standalone `mongod` with `TransactionNumbers are only allowed on a replica set member or mongos`. Every environment must therefore run MongoDB as a replica set — even single-node dev/CI.
+
+- **docker-compose / local dev:** image `mongodb/mongodb-community-server:7.0-ubuntu2204` boots single-node RS by default (no `rs.initiate` needed, no extra flags). Connection string is unchanged: `mongodb://mongo:27017` (compose) / `mongodb://localhost:27017` (local).
+- **CI (`.github/workflows/ci.yml` service + Testcontainers fixture):** same community-server image, same connection string shape (`mongodb://localhost:27017`). Transaction-capable tests run unmodified.
+- **Atlas (M0+):** replica set by default — no action needed. Keep using the `mongodb+srv://` connection string.
+- **Production self-hosted (multi-node):** initialize the RS once on first deploy (`mongosh --eval 'rs.initiate(...)'` with your members), then use `mongodb://host1,host2,host3/?replicaSet=<name>` as `MongoDbSettings__ConnectionString`. Verify with `mongosh --eval 'db.adminCommand("ping"); rs.status().ok'`. Keyfiles/TLS per your hardening guide — out of scope here.
 
 ## Health endpoints
 
