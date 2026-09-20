@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "skills": {
+    "aspnet-core": {
+      "source": "openai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/.curated/aspnet-core/SKILL.md",
+      "computedHash": "192537b889ef60aba67db5f3c1f694e460fde9b6a45fb4c35ecab8e7710bfa67"
+    },
+    "assertion-quality": {
+      "source": "dotnet/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/dotnet-test/skills/assertion-quality/SKILL.md",
+      "computedHash": "fd67936085b402963fe03a20bb3104a6aafdfd87a9877fde6a3d9d29d46a00ab"
+    },
+    "authoring-github-workflows": {
+      "source": "dotnet/skills",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/authoring-github-workflows/SKILL.md",
+      "computedHash": "8a1ab212d59191e828ad00d02060c93cb642ff35dcb1761212a7cd2dcef212cb"
+    },
+    "configuring-opentelemetry-dotnet": {
+      "source": "dotnet/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/dotnet-aspnetcore/skills/configuring-opentelemetry-dotnet/SKILL.md",
+      "computedHash": "736b7476710267bd46154714f38e16f5bac5498ce6a9aa980eb1d0a214960890"
+    },
+    "coverage-analysis": {
+      "source": "dotnet/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/dotnet-test/skills/coverage-analysis/SKILL.md",
+      "computedHash": "ab83eabf25fe2b06cb9d0bdd7c170780d295b0aac2371890ac2e895bce51a0cd"
+    },
+    "create-datadriven-aspnetcore": {
+      "source": "dotnet/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/dotnet-data/skills/create-datadriven-aspnetcore/SKILL.md",
+      "computedHash": "f0361dc87f87fec319cc1c33d18896c6c5a98ea0bcc8c3ac055d6be2791dafb8"
+    },
+    "dotnet-webapi": {
+      "source": "dotnet/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/dotnet-aspnetcore/skills/dotnet-webapi/SKILL.md",
+      "computedHash": "9f9ca386ddefb34ebeaf269c6a7dac0bd0a8e9ea901ad5c489cd4d5e7c61fb22"
+    },
+    "find-untested-sources": {
+      "source": "dotnet/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/dotnet-test/skills/find-untested-sources/SKILL.md",
+      "computedHash": "2ecc6757a2974c6baa03806f007be7611a41a644052481b47deec8fc414a2120"
+    },
+    "optimizing-ef-core-queries": {
+      "source": "dotnet/skills",
+      "sourceType": "github",
+      "skillPath": "plugins/dotnet-data/skills/optimizing-ef-core-queries/SKILL.md",
+      "computedHash": "98eb6bb1ab357806cf068908b5b00c3992b898b9428b587a7f357adb3387c8aa"
+    }
+  }
+}
