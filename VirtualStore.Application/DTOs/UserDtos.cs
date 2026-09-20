@@ -41,7 +41,7 @@ public class UpdateUserDto
 public class UserFilterDto
 {
     public string? Search { get; set; }
-    public UserRole? Role { get; set; }
+    public List<UserRole>? Roles { get; set; }
     public int PageNumber { get; set; } = 1;
     public int PageSize { get; set; } = 20;
 }

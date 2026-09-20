@@ -52,6 +52,21 @@ try
     app.MapHealthChecks("/health");
     app.MapControllers();
 
+    // Ensure MongoDB indexes (non-fatal)
+    using (var scope = app.Services.CreateScope())
+    {
+        try
+        {
+            var mongoContext = scope.ServiceProvider.GetRequiredService<VirtualStore.Infrastructure.Data.MongoDbContext>();
+            await mongoContext.EnsureIndexesAsync();
+        }
+        catch (Exception ex)
+        {
+            var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+            logger.LogWarning(ex, "MongoDB index creation failed (non-fatal)");
+        }
+    }
+
     // Seed the database
     using (var scope = app.Services.CreateScope())
     {
