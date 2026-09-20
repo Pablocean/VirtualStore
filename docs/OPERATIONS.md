@@ -2,7 +2,7 @@
 
 ## Environment keys
 
-All settings bind from `appsettings.json`, overridden by env/`.env` (`__` separator, loaded by `dotenv.net`). Every secret ships **empty** — the app boots but auth/email/Stripe fail until configured.
+All settings bind from `appsettings.json`, overridden by env/`.env` (`__` separator, loaded by `dotenv.net`). `appsettings.json` ships secrets **empty** by design and `DatabaseSeeder` ships empty (code falls back to `admin@virtualstore.com` / `Admin123!` / `admin`). Startup **fails fast**: `ValidateRequiredConfiguration` (top of `AddApplicationServices`, before JWT setup) throws `InvalidOperationException` when `JwtSettings:Secret` is shorter than 32 chars or `MongoDbSettings:ConnectionString` is empty (all environments); in `Production` an empty `StripeSettings:SecretKey` or `EmailSettings:Password` also throws, while in `Development` those two only log a warning. `ConfigDriftTests` keeps `appsettings.json` ↔ `.env.example` in sync (excluding `Serilog`/`Logging`/`AllowedHosts`).
 
 | Key | Default | Required | Notes |
 |---|---|---|---|
@@ -15,7 +15,7 @@ All settings bind from `appsettings.json`, overridden by env/`.env` (`__` separa
 | `EmailSettings__SmtpServer` / `__Port` / `__SenderEmail` / `__SenderName` / `__Username` / `__Password` / `__EnableSsl` | — / `587` / — | OTP only | any SMTP (Gmail app-password works) |
 | `StripeSettings__SecretKey` / `__PublishableKey` / `__WebhookSecret` | `""` | payments only | `sk_test_…` / `pk_test_…` / `whsec_…` |
 | `DatabaseSeeder__AdminEmail` / `__AdminPassword` / `__AdminUsername` | `admin@virtualstore.com` / `Admin123!` / `admin` | — | defaults log a warning — rotate |
-| `CorsSettings__AllowedOrigins__0…` | `http://localhost:3000`, `https://localhost:7038`, `https://localhost:5293` | — | extend for your SPA |
+| `CorsSettings__AllowedOrigins__0/__1/__2` | `http://localhost:3000`, `https://localhost:7038`, `https://localhost:5293` | — | extend for your SPA |
 | `ASPNETCORE_ENVIRONMENT` | `Development` | — | `Production` in compose |
 
 Copy `.env.example` → `.env` for local dev. Production: inject via host env or vault; never commit `.env`.

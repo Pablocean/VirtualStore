@@ -30,9 +30,9 @@ public class DatabaseSeeder
             || string.IsNullOrWhiteSpace(configuredPassword)
             || string.IsNullOrWhiteSpace(configuredUsername);
 
-        var adminEmail = configuredEmail ?? "admin@virtualstore.com";
-        var adminPassword = configuredPassword ?? "Admin123!";
-        var adminUsername = configuredUsername ?? "admin";
+        var adminEmail = string.IsNullOrWhiteSpace(configuredEmail) ? "admin@virtualstore.com" : configuredEmail;
+        var adminPassword = string.IsNullOrWhiteSpace(configuredPassword) ? "Admin123!" : configuredPassword;
+        var adminUsername = string.IsNullOrWhiteSpace(configuredUsername) ? "admin" : configuredUsername;
 
         // Check if any admin already exists (by email or role)
         var existingAdmin = await _userRepository.FindOneAsync(u => u.Email == adminEmail);
