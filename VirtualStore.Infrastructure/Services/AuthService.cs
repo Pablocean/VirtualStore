@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
-using VirtualStore.Application.DTOs;
 using VirtualStore.Application.DTOs.Auth;
 using VirtualStore.Application.Interfaces;
 using VirtualStore.Domain.Entities;
@@ -12,6 +12,9 @@ namespace VirtualStore.Infrastructure.Services;
 
 public class AuthService : IAuthService
 {
+    private const int MaxOtpAttempts = 5;
+    private static readonly TimeSpan OtpLifetime = TimeSpan.FromMinutes(10);
+
     private readonly IRepository<User> _userRepository;
     private readonly ITokenService _tokenService;
     private readonly IEmailService _emailService;
@@ -38,20 +41,18 @@ public class AuthService : IAuthService
         if (user == null || !VerifyPassword(request.Password, user.PasswordHash))
             throw new UnauthorizedAccessException("Invalid credentials");
 
-        // Two-factor logic
+        // Two-factor logic (OTP cache keys normalized by lowercase email)
         if (user.TwoFactorEnabled && string.IsNullOrEmpty(request.OtpCode))
         {
             var otp = GenerateOtp();
-            _cache.Set($"otp_{user.Email}", otp, TimeSpan.FromMinutes(10));
+            _cache.Set(OtpCacheKey(user.Email), otp, OtpLifetime);
             await _emailService.SendOtpEmailAsync(user.Email, otp);
             return new TokenResponse { RequiresTwoFactor = true };
         }
 
         if (user.TwoFactorEnabled && !string.IsNullOrEmpty(request.OtpCode))
         {
-            if (!_cache.TryGetValue($"otp_{user.Email}", out string? cachedOtp) || cachedOtp != request.OtpCode)
-                throw new UnauthorizedAccessException("Invalid OTP code");
-            _cache.Remove($"otp_{user.Email}");
+            ValidateOtpOrThrow(user.Email, request.OtpCode);
         }
 
         // Generate tokens
@@ -85,21 +86,35 @@ public class AuthService : IAuthService
             throw new UnauthorizedAccessException("Invalid refresh token");
 
         var refreshToken = user.RefreshTokens.Single(rt => rt.Token == token);
+
+        // Reuse detection: presented token was already revoked -> possible theft.
+        // Revoke all active descendant tokens for this user, then reject.
+        if (refreshToken.Revoked != null)
+        {
+            foreach (var activeToken in user.RefreshTokens.Where(rt => rt.IsActive))
+            {
+                activeToken.Revoked = DateTime.UtcNow;
+                activeToken.RevokedByIp = ipAddress;
+            }
+            await _userRepository.UpdateAsync(user.Id, user);
+            throw new UnauthorizedAccessException("Refresh token reuse detected");
+        }
+
         if (!refreshToken.IsActive)
             throw new UnauthorizedAccessException("Inactive refresh token");
 
-        // Rotation: revoke old and issue new
+        // Rotation: revoke old and issue new. Old token points forward to its replacement.
+        var newRefreshToken = _tokenService.GenerateRefreshToken();
         refreshToken.Revoked = DateTime.UtcNow;
         refreshToken.RevokedByIp = ipAddress;
+        refreshToken.ReplacedByToken = newRefreshToken;
 
-        var newRefreshToken = _tokenService.GenerateRefreshToken();
         var newRefreshTokenEntity = new RefreshToken
         {
             Token = newRefreshToken,
             Expires = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationDays),
             Created = DateTime.UtcNow,
-            CreatedByIp = ipAddress,
-            ReplacedByToken = newRefreshToken
+            CreatedByIp = ipAddress
         };
         user.RefreshTokens.Add(newRefreshTokenEntity);
         await _userRepository.UpdateAsync(user.Id, user);
@@ -129,19 +144,32 @@ public class AuthService : IAuthService
     private static bool VerifyPassword(string password, string hash)
         => BCrypt.Net.BCrypt.Verify(password, hash);
 
-    Task<TokenResponse> IAuthService.RefreshTokenAsync(string token, string ipAddress)
-    {
-        throw new NotImplementedException();
-    }
+    private static string OtpCacheKey(string email) => $"otp_{email.ToLowerInvariant()}";
 
-    public Task<string> GenerateOtpAsync(string email)
-    {
-        throw new NotImplementedException();
-    }
+    private static string OtpAttemptCacheKey(string email) => $"otp_attempts_{email.ToLowerInvariant()}";
 
-    public Task<bool> ValidateOtpAsync(string email, string otp)
+    private void ValidateOtpOrThrow(string email, string providedOtp)
     {
-        throw new NotImplementedException();
-    }
+        var otpKey = OtpCacheKey(email);
+        var attemptKey = OtpAttemptCacheKey(email);
 
+        if (_cache.TryGetValue<int>(attemptKey, out var attempts) && attempts >= MaxOtpAttempts)
+            throw new UnauthorizedAccessException("Too many OTP attempts");
+
+        var valid = _cache.TryGetValue<string>(otpKey, out var cachedOtp)
+            && cachedOtp != null
+            && CryptographicOperations.FixedTimeEquals(
+                Encoding.UTF8.GetBytes(cachedOtp),
+                Encoding.UTF8.GetBytes(providedOtp));
+
+        if (!valid)
+        {
+            var current = _cache.TryGetValue<int>(attemptKey, out var count) ? count : 0;
+            _cache.Set(attemptKey, current + 1, OtpLifetime);
+            throw new UnauthorizedAccessException("Invalid OTP code");
+        }
+
+        _cache.Remove(otpKey);
+        _cache.Remove(attemptKey);
+    }
 }
