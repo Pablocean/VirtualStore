@@ -67,6 +67,7 @@ Collections are named `typeof(T).Name` — `User`, `Product`, `Category`, `Cart`
 | `ux_user_email` | `User.Email` | unique asc | login lookup + duplicate prevention |
 | `ux_cart_userId` | `Cart.UserId` | unique asc | one cart per user |
 | `ix_order_userId` | `Order.UserId` | asc | order history (`GetUserOrdersAsync`) |
+| `ux_order_userIdempotency` | `Order.(UserId, IdempotencyKey)` | unique sparse asc | idempotent checkout replay (ADR-0006) |
 | `ix_product_categoryId` | `Product.CategoryId` | asc | catalog filtering |
 | `ix_category_parentCategoryId` | `Category.ParentCategoryId` | asc | category tree traversal |
 
@@ -89,6 +90,29 @@ stateDiagram-v2
 ```
 
 Enforced by `OrderService.AllowedTransitions`; illegal moves throw `InvalidOperationException` → `409`. Webhook-driven moves (`PaymentReceived`/`Cancelled`) and admin moves share the same guard, so the machine cannot be bypassed.
+
+## Checkout (transactional, idempotent)
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant O as OrdersController
+    participant S as OrderService
+    participant M as Mongo (replica set)
+    C->>O: POST /api/orders (+ Idempotency-Key header?)
+    O->>S: CreateOrderAsync(userId, dto)
+    S->>M: BEGIN transaction (ambient session)
+    S->>M: idempotency check → return existing / 409 on payload mismatch
+    S->>M: re-price + validate + decrement stock
+    S->>M: insert order → clear cart
+    S->>M: COMMIT (abort → 500, see ADR-0006)
+```
+
+`MongoDbContext.TransactAsync` exposes the session ambiently (`AsyncLocal.CurrentSession`);
+`MongoRepository<T>` enlists automatically — `IRepository<T>` is unchanged. Same `(userId, key)`
+replays return the existing order; duplicate-key on insert (lost race) falls back to fetching
+the winner. Order history and category listings page server-side via `PagedAsync` (100-cap).
+Full rationale in ADR-0006 (supersedes the non-transactional caveats of ADR-0004).
 
 ## Cross-cutting notes
 

@@ -37,6 +37,12 @@ public class CreateOrderDto
     public List<OrderItemDto> Items { get; set; } = new();
     public AddressDto ShippingAddress { get; set; } = new();
     public string? StripePaymentMethodId { get; set; } // Optional for Stripe
+    /// <summary>
+    /// Optional idempotency key. The controller prefers the <c>Idempotency-Key</c>
+    /// request header over this body value. Same (user, key) replays return the
+    /// existing order; same key with a different payload is a 409. See ADR-0006.
+    /// </summary>
+    public string? IdempotencyKey { get; set; }
 }
 
 public class UpdateOrderStatusDto

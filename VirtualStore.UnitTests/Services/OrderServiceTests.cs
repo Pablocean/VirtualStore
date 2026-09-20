@@ -108,7 +108,7 @@ public class OrderServiceTests
         await h.Service.CreateOrderAsync("u1", dto);
 
         product.StockQuantity.Should().Be(2);
-        h.Products.Verify(r => r.UpdateAsync("p1", It.IsAny<Product>()), Times.Once);
+        h.Products.Verify(r => r.UpdateAsync("p1", It.IsAny<Product>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public class OrderServiceTests
 
         await h.Service.CreateOrderAsync("u1", dto);
 
-        h.Carts.Verify(r => r.DeleteAsync("cart1"), Times.Once);
+        h.Carts.Verify(r => r.DeleteAsync("cart1", It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

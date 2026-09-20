@@ -7,16 +7,65 @@ namespace VirtualStore.Infrastructure.Data;
 
 public class MongoDbContext
 {
+    public IMongoClient Client { get; }
     public IMongoDatabase Database { get; }
+
+    private readonly AsyncLocal<IClientSessionHandle?> _currentSession = new();
+
+    /// <summary>
+    /// Ambient session set by <see cref="TransactAsync"/> for the current async flow.
+    /// <see cref="Repositories.MongoRepository{T}"/> enlists in it automatically.
+    /// Null outside a transaction (including all unit tests with mocked repos).
+    /// </summary>
+    public IClientSessionHandle? CurrentSession
+    {
+        get => _currentSession.Value;
+        private set => _currentSession.Value = value;
+    }
     
     public MongoDbContext(IOptions<MongoDbSettings> settings)
     {
-        var client = new MongoClient(settings.Value.ConnectionString);
-        Database = client.GetDatabase(settings.Value.DatabaseName);
+        Client = new MongoClient(settings.Value.ConnectionString);
+        Database = Client.GetDatabase(settings.Value.DatabaseName);
     }
     
     public IMongoCollection<T> GetCollection<T>(string name)
         => Database.GetCollection<T>(name);
+
+    /// <summary>
+    /// Runs <paramref name="work"/> inside a multi-document transaction on a fresh
+    /// session, exposing it as <see cref="CurrentSession"/> for the duration.
+    /// Requires a replica set (compose/CI/Testcontainers use mongodb-community-server).
+    /// Re-entrant: when already inside a transaction the work runs on the ambient
+    /// session without opening a nested transaction. Driver-level retry inside
+    /// <c>WithTransactionAsync</c> may re-run <paramref name="work"/> on transient
+    /// errors, so transactional work must tolerate re-execution.
+    /// Transaction aborts surface as <see cref="MongoException"/> (mapped to 500
+    /// by the API handler; see ADR-0006 follow-ups).
+    /// </summary>
+    public async Task TransactAsync(Func<Task> work, CancellationToken ct)
+    {
+        if (CurrentSession is not null)
+        {
+            await work().ConfigureAwait(false);
+            return;
+        }
+
+        using var session = await Client.StartSessionAsync(cancellationToken: ct).ConfigureAwait(false);
+        await session.WithTransactionAsync(async (s, _) =>
+        {
+            CurrentSession = s;
+            try
+            {
+                await work().ConfigureAwait(false);
+            }
+            finally
+            {
+                CurrentSession = null;
+            }
+            return true;
+        }, cancellationToken: ct).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Ensures MongoDB indexes. Collection names follow typeof(T).Name (no renames).
@@ -51,6 +100,14 @@ public class MongoDbContext
             Builders<Order>.IndexKeys.Ascending(o => o.UserId),
             new CreateIndexOptions { Name = "ix_order_userId" });
         await orderCollection.Indexes.CreateOneAsync(orderUserIndex, cancellationToken: ct);
+
+        // Idempotency replay guard: one order per (UserId, IdempotencyKey).
+        // Sparse so orders without a key (field omitted via BsonIgnoreIfNull) are
+        // not indexed and never collide. See ADR-0006.
+        var orderIdempotencyIndex = new CreateIndexModel<Order>(
+            Builders<Order>.IndexKeys.Ascending(o => o.UserId).Ascending(o => o.IdempotencyKey),
+            new CreateIndexOptions { Unique = true, Sparse = true, Name = "ux_order_userIdempotency" });
+        await orderCollection.Indexes.CreateOneAsync(orderIdempotencyIndex, cancellationToken: ct);
 
         // ParentCategoryId on Category.
         var categoryCollection = GetCollection<Category>(typeof(Category).Name);

@@ -53,7 +53,7 @@ public class OrderStatusTransitionTests
 
         result.Status.Should().Be(to);
         order.Status.Should().Be(to);
-        repoMock.Verify(r => r.UpdateAsync("o1", It.Is<Order>(o => o.Status == to)), Times.Once);
+        repoMock.Verify(r => r.UpdateAsync("o1", It.Is<Order>(o => o.Status == to), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     public static TheoryData<OrderStatus, OrderStatus> IllegalTransitions => new()
