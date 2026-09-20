@@ -89,7 +89,9 @@ public static class ServiceExtensions
             q.AddTrigger(opts => opts
                 .ForJob(jobKey)
                 .WithIdentity("RefreshTokenCleanup-trigger")
-                .WithCronSchedule("0 0 3 * * ?") // Daily at 3:00 AM
+                // Missed 03:00 firings are skipped; the next night catches up
+                // (job is idempotent — see RefreshTokenCleanupJob, ADR-0010).
+                .WithCronSchedule("0 0 3 * * ?", x => x.WithMisfireHandlingInstructionDoNothing())
             );
         });
         services.AddQuartzHostedService(q => q.WaitForJobsToComplete = true);

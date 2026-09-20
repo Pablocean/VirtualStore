@@ -19,6 +19,14 @@ public class AuthService : IAuthService
 
     private const int MaxFailedAccessAttempts = 5;
     private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// Maximum ACTIVE refresh tokens per user (ADR-0010). On login, when the
+    /// append would exceed the cap, the oldest-active tokens beyond the cap are
+    /// revoked (Revoked + ReplacedByToken set to the new token).
+    /// </summary>
+    public const int MaxActiveRefreshTokens = 10;
+
     private static readonly TimeSpan EmailConfirmationLifetime = TimeSpan.FromHours(24);
     private static readonly TimeSpan PasswordResetLifetime = TimeSpan.FromHours(1);
 
@@ -99,6 +107,7 @@ public class AuthService : IAuthService
             CreatedByIp = ipAddress
         };
         user.RefreshTokens.Add(refreshTokenEntity);
+        EnforceActiveTokenCap(user, refreshTokenEntity.Token, ipAddress);
         user.LastLoginAt = DateTime.UtcNow;
         user.FailedAccessCount = 0;
         user.LockoutEnd = null;
@@ -271,6 +280,32 @@ public class AuthService : IAuthService
         {
             rt.Revoked = now;
             rt.RevokedByIp = ipAddress;
+        }
+    }
+
+    /// <summary>
+    /// Caps ACTIVE tokens at <see cref="MaxActiveRefreshTokens"/> (ADR-0010):
+    /// revokes the oldest-active tokens beyond the cap, linking each to the
+    /// newly issued token via <c>ReplacedByToken</c>. Revoked tokens stay on
+    /// the document for the 90-day forensics window (see
+    /// <c>RefreshTokenCleanupJob</c>).
+    /// </summary>
+    private static void EnforceActiveTokenCap(User user, string newToken, string ipAddress)
+    {
+        var active = user.RefreshTokens
+            .Where(rt => rt.IsActive)
+            .OrderBy(rt => rt.Created)
+            .ToList();
+        var excess = active.Count - MaxActiveRefreshTokens;
+        if (excess <= 0)
+            return;
+
+        var now = DateTime.UtcNow;
+        foreach (var oldest in active.Take(excess))
+        {
+            oldest.Revoked = now;
+            oldest.RevokedByIp = ipAddress;
+            oldest.ReplacedByToken = newToken;
         }
     }
 

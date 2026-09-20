@@ -55,7 +55,7 @@ Multi-document transactions (Epic A1: order checkout, stock decrement) fail on a
 
 ## Quartz (03:00 AM)
 
-`RefreshTokenCleanupJob`, cron `0 0 3 * * ?`, `[DisallowConcurrentExecution]`: deletes expired unrevoked refresh tokens across users, logs `Removed {Count} expired refresh tokens`. Missed runs are benign (next night catches up).
+`RefreshTokenCleanupJob`, cron `0 0 3 * * ?`, `[DisallowConcurrentExecution]`, misfire `DoNothing` (a missed firing is skipped; the next night catches up — the job is idempotent). Paged sweep (100 users/page): purges tokens that are (expired AND never-revoked) OR (expired AND revoked older than 90 days); revoked-within-90d tokens are kept for forensics. Per-user try/catch — one bad doc logs a warning (`failed to purge tokens for user {UserId}`) without aborting the run; logs `Removed {Count} expired refresh tokens across {Users} users`. See ADR-0010.
 
 ## Cache (HybridCache + Redis L2 opt-in)
 
@@ -63,7 +63,34 @@ Multi-document transactions (Epic A1: order checkout, stock decrement) fail on a
 
 ## Logs (Serilog)
 
-Configured in `appsettings.json`: `Information` minimum, sinks = console + `Logs/log-.txt` (daily rolling). Request lines (`HTTP {Method} {Path}`) come from inline middleware; errors carry `TraceId` (also returned in `ProblemDetails.traceId` — correlate with that). No log shipping configured — mount/persist `Logs/` in production.
+Configured in `appsettings.json`: `Information` minimum, sinks = console + `Logs/log-.txt` (daily rolling). Request lines (`HTTP {Method} {Path}`) come from inline middleware; errors carry `TraceId` (also returned in `ProblemDetails.traceId` — correlate with that). No log shipping configured — `docker-compose.yml` bind-mounts `./Logs:/app/Logs` on the `api` service so file logs survive container restarts; back it up or ship it per your platform.
+
+## Backup & restore (MongoDB, ADR-0010)
+
+Back up the `mongo-data` volume (or Atlas continuous backup). File-system volume snapshots alone can capture a mid-write WiredTiger state — always pair them with a logical dump:
+
+```bash
+# Nightly logical dump (02:00, before the 03:00 token cleanup), retains 7 days:
+docker exec virtualstore-mongo-1 mongodump --out /dump/virtualstore-$(date +%F)
+# or against Atlas / remote:
+mongodump --uri "$MongoDbSettings__ConnectionString" --out ./backups/virtualstore-$(date +%F)
+find ./backups -maxdepth 1 -mtime +7 -delete
+```
+
+Restore procedure:
+
+```bash
+# 1. Stop writers (scale api to 0) so no new orders land mid-restore.
+# 2. Drop + restore into the target database:
+mongorestore --uri "mongodb://localhost:27017" --drop ./backups/virtualstore-2026-09-20
+# 3. Re-run EnsureIndexesAsync (boot does this automatically — just restart api)
+#    and verify: mongosh --eval 'db.Order.countDocuments(); db.User.countDocuments()'.
+# 4. Rotate JwtSettings__Secret if the backup may have exposed session material,
+#    and invalidate Stripe webhook dedup expectations (ProcessedWebhookEvent TTLs
+#    are 30d — a restore older than that simply reprocesses redeliveries safely).
+```
+
+**RTO/RPO note:** with a nightly 02:00 dump, worst-case data loss (RPO) is ~24 h of orders/users; single-`mongorestore` recovery (RTO) is minutes for this dataset size. Tighten RPO with 6-hourly dumps or Atlas point-in-time recovery if order volume justifies it. Test the restore quarterly — an untested backup is not a backup.
 
 ## Observability opt-ins
 

@@ -62,6 +62,9 @@ public class MongoRepository<T> : IRepository<T> where T : BaseEntity
     public Task DeleteAsync(string id)
         => DeleteAsync(id, CancellationToken.None);
 
+    public Task HardDeleteAsync(string id)
+        => HardDeleteAsync(id, CancellationToken.None);
+
     public Task<bool> ExistsAsync(Expression<Func<T, bool>> predicate)
         => ExistsAsync(predicate, CancellationToken.None);
 
@@ -129,6 +132,16 @@ public class MongoRepository<T> : IRepository<T> where T : BaseEntity
             await _collection.UpdateOneAsync(filter, update, cancellationToken: ct);
         else
             await _collection.UpdateOneAsync(Session, filter, update, cancellationToken: ct);
+    }
+
+    /// <inheritdoc />
+    public async Task HardDeleteAsync(string id, CancellationToken ct)
+    {
+        var filter = Builders<T>.Filter.Eq(x => x.Id, id);
+        if (Session is null)
+            await _collection.DeleteOneAsync(filter, cancellationToken: ct);
+        else
+            await _collection.DeleteOneAsync(Session, filter, cancellationToken: ct);
     }
 
     public async Task<bool> ExistsAsync(Expression<Func<T, bool>> predicate, CancellationToken ct)

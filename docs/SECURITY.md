@@ -8,6 +8,12 @@
 - **Reuse detection**: presenting an already-revoked token revokes *all* active tokens for that user, then returns `401` — a stolen-token replay bricks the whole family instead of minting a new session.
 - Logout revokes the presented token. Expired-but-unrevoked tokens are purged nightly by Quartz (revoked ones are retained for forensics).
 
+## Token retention & GDPR erasure (Epic E, ADR-0010)
+
+- **Active-token cap:** at most **10 active** refresh tokens per user — on login, appending the 11th revokes the oldest-active (`Revoked` + `ReplacedByToken` link). Bounds session-table growth per account.
+- **Nightly purge (`RefreshTokenCleanupJob`, 03:00):** removes tokens that are (expired AND never-revoked) OR (expired AND revoked **older than 90 days**). Revoked-within-90d tokens are kept as reuse-detection evidence, then age out. The sweep is paged (100 users/page) and per-user-isolated: one corrupt doc logs a warning and the run continues; the idempotent job is retried by the next-night run (misfires skipped via `WithMisfireHandlingInstructionDoNothing`).
+- **Self-service privacy (`MeController`, `api/me`, any authenticated role):** `GET /api/me/export` returns profile + orders + carts + token metadata with **no secrets** (no hash, no token values); `POST /api/me/purge {confirmPassword}` BCrypt-verifies intent, then hard-deletes the user (`HardDeleteAsync`, bypassing soft-delete), deletes carts, pseudonymizes orders (`UserId → "deleted:{sha256hex}"`, address emptied, financials kept), and clears OTP/confirm/reset cache keys. Admin `DELETE /api/users/{id}` remains a soft-delete (`IsDeleted` flag) — erasure and deactivation are deliberately distinct operations.
+
 ## OTP (2FA) hardening
 
 - 6-digit code from `RandomNumberGenerator` (100000–999999), cached as `otp_{lowercase-email}` with **10-minute absolute TTL**, emailed via SMTP.
