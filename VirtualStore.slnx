@@ -3,4 +3,6 @@
   <Project Path="VirtualStore.Application/VirtualStore.Application.csproj" />
   <Project Path="VirtualStore.Domain/VirtualStore.Domain.csproj" />
   <Project Path="VirtualStore.Infrastructure/VirtualStore.Infrastructure.csproj" />
+  <Project Path="VirtualStore.UnitTests/VirtualStore.UnitTests.csproj" />
+  <Project Path="VirtualStore.IntegrationTests/VirtualStore.IntegrationTests.csproj" />
 </Solution>
