@@ -13,6 +13,8 @@ namespace VirtualStore.Infrastructure.Services;
 /// TTL: absolute <paramref name="expiration"/> when given, else a 5-minute absolute
 /// default (HybridCache has no sliding expiration — documented approximation of the
 /// previous 5-minute sliding default).
+/// Wave T0: HybridCache I/O goes through the injected <see cref="IHybridCacheAdapter"/>
+/// async seam (mockable in tests); the sync <see cref="ICacheService"/> surface is unchanged.
 /// </summary>
 public class CacheService : ICacheService
 {
@@ -26,15 +28,25 @@ public class CacheService : ICacheService
             | HybridCacheEntryFlags.DisableDistributedCacheWrite
     };
 
-    private readonly HybridCache _hybridCache;
+    private readonly IHybridCacheAdapter _adapter;
 
-    public CacheService(HybridCache hybridCache)
+    public CacheService(IHybridCacheAdapter adapter)
     {
-        _hybridCache = hybridCache;
+        _adapter = adapter;
+    }
+
+    /// <summary>
+    /// Back-compat convenience: wraps <paramref name="hybridCache"/> in the default
+    /// <see cref="HybridCacheAdapter"/>. Prefer the <see cref="IHybridCacheAdapter"/>
+    /// overload (used by DI) in new code.
+    /// </summary>
+    public CacheService(HybridCache hybridCache)
+        : this(new HybridCacheAdapter(hybridCache))
+    {
     }
 
     public T? Get<T>(string key) =>
-        _hybridCache.GetOrCreateAsync<T?>(
+        _adapter.GetOrCreateAsync<T?>(
             key,
             _ => ValueTask.FromResult<T?>(default),
             NoWriteOptions).GetAwaiter().GetResult();
@@ -45,13 +57,13 @@ public class CacheService : ICacheService
         {
             Expiration = expiration ?? DefaultExpiration
         };
-        _hybridCache.SetAsync(key, value, options).GetAwaiter().GetResult();
+        _adapter.SetAsync(key, value, options).GetAwaiter().GetResult();
     }
 
     public void Remove(string key) =>
-        _hybridCache.RemoveAsync(key).GetAwaiter().GetResult();
+        _adapter.RemoveAsync(key).GetAwaiter().GetResult();
 
-    public bool TryGet<T>(string key, out T? value)
+    public bool TryGet<T>(string key, out T? value) where T : class
     {
         value = Get<T>(key);
         return value is not null;

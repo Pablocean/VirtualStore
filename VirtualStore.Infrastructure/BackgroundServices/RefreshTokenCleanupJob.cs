@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Quartz;
+using VirtualStore.Application.Common;
 using VirtualStore.Domain.Entities;
 using VirtualStore.Domain.Interfaces;
 
@@ -38,17 +39,22 @@ public class RefreshTokenCleanupJob : IJob
 
     private readonly IRepository<User> _userRepository;
     private readonly ILogger<RefreshTokenCleanupJob> _logger;
+    private readonly IDateTimeProvider _clock;
 
-    public RefreshTokenCleanupJob(IRepository<User> userRepository, ILogger<RefreshTokenCleanupJob> logger)
+    public RefreshTokenCleanupJob(
+        IRepository<User> userRepository,
+        ILogger<RefreshTokenCleanupJob> logger,
+        IDateTimeProvider? clock = null)
     {
         _userRepository = userRepository;
         _logger = logger;
+        _clock = clock ?? new SystemDateTimeProvider();
     }
 
     public async Task Execute(IJobExecutionContext context)
     {
         _logger.LogInformation("Starting refresh token cleanup.");
-        var now = DateTime.UtcNow;
+        var now = _clock.UtcNow;
         var forensicsCutoff = now - RevokedForensicsRetention;
 
         int totalPurged = 0;

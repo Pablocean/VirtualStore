@@ -20,6 +20,7 @@ using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using VirtualStore.API.Data;
 using VirtualStore.API.Middlewares;
+using VirtualStore.Application.Common;
 using VirtualStore.Application.Interfaces;
 using VirtualStore.Application.Mappings;
 using VirtualStore.Application.Validators;
@@ -61,6 +62,13 @@ public static class ServiceExtensions
         services.AddScoped<IEmailService, EmailService>();
         services.AddScoped<IStripePaymentService, StripePaymentService>();
         services.AddSingleton<ICacheService, CacheService>();
+
+        // ===== BEGIN wave/t0-seams additions (injectable testability seams; parallel waves edit this file too) =====
+        services.AddSingleton<IDateTimeProvider, SystemDateTimeProvider>();
+        services.AddSingleton<ISmtpClientFactory, SmtpClientFactory>();
+        services.AddSingleton<IStripeClientFactory, StripeClientFactory>();
+        services.AddSingleton<IHybridCacheAdapter, HybridCacheAdapter>();
+        // ===== END wave/t0-seams additions =====
 
         // ===== BEGIN wave/1d-orders-payments additions (keep grouped; parallel waves edit this file too) =====
         services.AddScoped<ICategoryService, CategoryService>();

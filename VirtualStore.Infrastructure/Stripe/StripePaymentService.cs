@@ -18,6 +18,7 @@ public class StripePaymentService : IStripePaymentService
     private readonly StripeSettings _settings;
     private readonly IRepository<ProcessedWebhookEvent>? _webhookEvents;
     private readonly ILogger<StripePaymentService> _logger;
+    private readonly IStripeClientFactory _stripeFactory;
 
     // Static pipeline (Stripe SDK is used directly, no IHttpClient): retry 2x on transient
     // Stripe errors (network failure, 408/429/5xx) + 10s per-attempt timeout. Signature
@@ -36,7 +37,8 @@ public class StripePaymentService : IStripePaymentService
 
     // Stripe.net exposes HttpStatusCode as non-nullable (default 0 when no HTTP
     // response was received, e.g. network failure) — treat that as transient too.
-    private static bool IsTransientStripeError(StripeException ex) =>
+    // Wave T0: internal so unit tests can cover the transient matrix directly.
+    internal static bool IsTransientStripeError(StripeException ex) =>
         ex.HttpStatusCode == default
         || ex.HttpStatusCode == System.Net.HttpStatusCode.RequestTimeout
         || ex.HttpStatusCode == (System.Net.HttpStatusCode)429
@@ -50,14 +52,14 @@ public class StripePaymentService : IStripePaymentService
     public StripePaymentService(
         IOptions<StripeSettings> options,
         IRepository<ProcessedWebhookEvent>? webhookEvents = null,
-        ILogger<StripePaymentService>? logger = null)
+        ILogger<StripePaymentService>? logger = null,
+        IStripeClientFactory? stripeFactory = null)
     {
         _settings = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _webhookEvents = webhookEvents;
         _logger = logger ?? NullLogger<StripePaymentService>.Instance;
+        _stripeFactory = stripeFactory ?? new StripeClientFactory();
     }
-
-    private StripeClient CreateClient() => new(_settings.SecretKey);
 
     private static long ToMinorUnits(decimal amount)
         => (long)Math.Round(amount * 100m, MidpointRounding.AwayFromZero);
@@ -88,7 +90,7 @@ public class StripePaymentService : IStripePaymentService
                 ? new Dictionary<string, string>()
                 : new Dictionary<string, string> { ["orderId"] = orderId }
         };
-        var service = new PaymentIntentService(CreateClient());
+        var service = _stripeFactory.CreatePaymentIntentService(_settings.SecretKey);
         var intent = await _stripePipeline.ExecuteAsync(
             async ct => await service.CreateAsync(options, ToRequestOptions(idempotencyKey), cancellationToken: ct),
             cancellationToken);
@@ -97,7 +99,7 @@ public class StripePaymentService : IStripePaymentService
 
     public async Task<bool> ConfirmPaymentAsync(string paymentIntentId, CancellationToken cancellationToken = default)
     {
-        var service = new PaymentIntentService(CreateClient());
+        var service = _stripeFactory.CreatePaymentIntentService(_settings.SecretKey);
         var paymentIntent = await _stripePipeline.ExecuteAsync(
             async ct => await service.GetAsync(paymentIntentId, cancellationToken: ct),
             cancellationToken);
@@ -113,7 +115,7 @@ public class StripePaymentService : IStripePaymentService
         if (amount.HasValue)
             options.Amount = ToMinorUnits(amount.Value);
 
-        var service = new RefundService(CreateClient());
+        var service = _stripeFactory.CreateRefundService(_settings.SecretKey);
         var refund = await _stripePipeline.ExecuteAsync(
             async ct => await service.CreateAsync(options, ToRequestOptions(idempotencyKey), cancellationToken: ct),
             cancellationToken);
@@ -133,7 +135,7 @@ public class StripePaymentService : IStripePaymentService
         cancellationToken.ThrowIfCancellationRequested();
 
         // Throws StripeException when the signature is invalid; the controller maps it to 400.
-        var stripeEvent = EventUtility.ConstructEvent(json, signatureHeader, _settings.WebhookSecret);
+        var stripeEvent = _stripeFactory.ConstructEvent(json, signatureHeader, _settings.WebhookSecret);
 
         // Check-then-insert dedup (ADR-0007): redeliveries share the Stripe event id.
         // Duplicate → ignored result (controller acks 200, applies no state change).

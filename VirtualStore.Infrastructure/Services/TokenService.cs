@@ -5,6 +5,7 @@ using System.Text;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
+using VirtualStore.Application.Common;
 using VirtualStore.Application.Interfaces;
 using VirtualStore.Domain.Entities;
 using VirtualStore.Domain.Settings;
@@ -15,10 +16,12 @@ namespace VirtualStore.Infrastructure.Services;
 public class TokenService : ITokenService
 {
     private readonly JwtSettings _jwtSettings;
+    private readonly IDateTimeProvider _clock;
 
-    public TokenService(IOptions<JwtSettings> options)
+    public TokenService(IOptions<JwtSettings> options, IDateTimeProvider? clock = null)
     {
         _jwtSettings = options.Value;
+        _clock = clock ?? new SystemDateTimeProvider();
     }
 
     public string GenerateAccessToken(User user)
@@ -39,7 +42,7 @@ public class TokenService : ITokenService
             issuer: _jwtSettings.Issuer,
             audience: _jwtSettings.Audience,
             claims: claims,
-            expires: DateTime.UtcNow.AddMinutes(_jwtSettings.AccessTokenExpirationMinutes),
+            expires: _clock.UtcNow.AddMinutes(_jwtSettings.AccessTokenExpirationMinutes),
             signingCredentials: creds
         );
 

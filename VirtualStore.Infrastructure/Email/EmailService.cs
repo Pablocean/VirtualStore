@@ -12,6 +12,7 @@ namespace VirtualStore.Infrastructure.Email;
 public class EmailService : IEmailService
 {
     private readonly EmailSettings _emailSettings;
+    private readonly ISmtpClientFactory _smtpClientFactory;
 
     // Static pipeline (MailKit/Stripe SDK are used directly, no IHttpClient): retry 3x
     // exponential backoff + 10s per-attempt timeout.
@@ -26,12 +27,13 @@ public class EmailService : IEmailService
         .AddTimeout(TimeSpan.FromSeconds(10))
         .Build();
     
-    public EmailService(IOptions<EmailSettings> options)
+    public EmailService(IOptions<EmailSettings> options, ISmtpClientFactory? smtpClientFactory = null)
     {
         _emailSettings = options.Value;
+        _smtpClientFactory = smtpClientFactory ?? new SmtpClientFactory();
     }
     
-    public async Task SendEmailAsync(string to, string subject, string body)
+    public virtual async Task SendEmailAsync(string to, string subject, string body)
     {
         await _emailPipeline.ExecuteAsync(async cancellationToken =>
         {
@@ -41,7 +43,7 @@ public class EmailService : IEmailService
             email.Subject = subject;
             email.Body = new TextPart("html") { Text = body };
 
-            using var smtp = new SmtpClient();
+            using var smtp = _smtpClientFactory.CreateClient();
             await smtp.ConnectAsync(_emailSettings.SmtpServer, _emailSettings.Port,
                 _emailSettings.EnableSsl ? SecureSocketOptions.StartTls : SecureSocketOptions.Auto,
                 cancellationToken);
@@ -51,7 +53,7 @@ public class EmailService : IEmailService
         });
     }
     
-    public async Task SendOtpEmailAsync(string to, string otpCode)
+    public virtual async Task SendOtpEmailAsync(string to, string otpCode)
     {
         var subject = "Your Verification Code";
         var body = $@"
@@ -61,7 +63,7 @@ public class EmailService : IEmailService
         await SendEmailAsync(to, subject, body);
     }
 
-    public async Task SendConfirmationEmailAsync(string to, string token)
+    public virtual async Task SendConfirmationEmailAsync(string to, string token)
     {
         var subject = "Confirm your email";
         var body = $@"
@@ -72,7 +74,7 @@ public class EmailService : IEmailService
         await SendEmailAsync(to, subject, body);
     }
 
-    public async Task SendPasswordResetEmailAsync(string to, string token)
+    public virtual async Task SendPasswordResetEmailAsync(string to, string token)
     {
         var subject = "Password reset request";
         var body = $@"

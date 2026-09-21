@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.RateLimiting;
 using Scalar.AspNetCore;
 using Serilog;
+using System.Diagnostics.CodeAnalysis;
 using VirtualStore.API.Extensions;
 
 try
@@ -100,6 +101,8 @@ catch (Exception ex)
 }
 
 // Test entry point: enables WebApplicationFactory<Program> in VirtualStore.IntegrationTests.
+// Wave T0: excluded from code coverage (host bootstrapping only).
+[ExcludeFromCodeCoverage]
 public partial class Program
 {
 }
