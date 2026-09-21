@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\VirtualStore.API\VirtualStore.API.csproj" />
     <ProjectReference Include="..\VirtualStore.Application\VirtualStore.Application.csproj" />
     <ProjectReference Include="..\VirtualStore.Domain\VirtualStore.Domain.csproj" />
     <ProjectReference Include="..\VirtualStore.Infrastructure\VirtualStore.Infrastructure.csproj" />
