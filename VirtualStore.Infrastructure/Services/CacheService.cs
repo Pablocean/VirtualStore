@@ -30,17 +30,19 @@ public class CacheService : ICacheService
 
     private readonly IHybridCacheAdapter _adapter;
 
+    // Single DI ctor: MS.DI throws on multiple public ctors without
+    // [ActivatorUtilitiesConstructor] (found by Wave T1-c DI suite).
     public CacheService(IHybridCacheAdapter adapter)
     {
         _adapter = adapter;
     }
 
     /// <summary>
-    /// Back-compat convenience: wraps <paramref name="hybridCache"/> in the default
-    /// <see cref="HybridCacheAdapter"/>. Prefer the <see cref="IHybridCacheAdapter"/>
-    /// overload (used by DI) in new code.
+    /// Back-compat convenience for hand-construction in tests/tools: wraps
+    /// <paramref name="hybridCache"/> in the default <see cref="HybridCacheAdapter"/>.
+    /// Not used by DI. Kept non-public so the container has exactly one ctor.
     /// </summary>
-    public CacheService(HybridCache hybridCache)
+    internal CacheService(HybridCache hybridCache)
         : this(new HybridCacheAdapter(hybridCache))
     {
     }

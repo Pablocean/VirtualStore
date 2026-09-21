@@ -8,6 +8,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Wave T1c: seeder/transformer/DI suites exercise VirtualStore.API types
+         (DatabaseSeeder, BearerSecuritySchemeTransformer, ServiceExtensions),
+         which need the ASP.NET Core shared framework in this test project. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\VirtualStore.API\VirtualStore.API.csproj" />
     <ProjectReference Include="..\VirtualStore.Application\VirtualStore.Application.csproj" />
     <ProjectReference Include="..\VirtualStore.Domain\VirtualStore.Domain.csproj" />
