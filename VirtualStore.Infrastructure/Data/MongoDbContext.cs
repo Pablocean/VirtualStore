@@ -16,11 +16,12 @@ public class MongoDbContext
     /// Ambient session set by <see cref="TransactAsync"/> for the current async flow.
     /// <see cref="Repositories.MongoRepository{T}"/> enlists in it automatically.
     /// Null outside a transaction (including all unit tests with mocked repos).
+    /// Wave T0: setter is internal so tests can stage the re-entrant path.
     /// </summary>
     public IClientSessionHandle? CurrentSession
     {
         get => _currentSession.Value;
-        private set => _currentSession.Value = value;
+        internal set => _currentSession.Value = value;
     }
     
     public MongoDbContext(IOptions<MongoDbSettings> settings)
@@ -58,6 +59,39 @@ public class MongoDbContext
             try
             {
                 await work().ConfigureAwait(false);
+            }
+            finally
+            {
+                CurrentSession = null;
+            }
+            return true;
+        }, cancellationToken: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Session-aware overload: runs <paramref name="work"/> inside a multi-document
+    /// transaction on a fresh session (same semantics as <see cref="TransactAsync(Func{Task}, CancellationToken)"/>),
+    /// handing the live session to the work. Re-entrant: when already inside a
+    /// transaction the work runs on the ambient session without opening a nested
+    /// transaction. Driver-level retry inside <c>WithTransactionAsync</c> may re-run
+    /// <paramref name="work"/> on transient errors, so transactional work must
+    /// tolerate re-execution.
+    /// </summary>
+    public async Task TransactAsync(Func<IClientSessionHandle, Task> work, CancellationToken ct = default)
+    {
+        if (CurrentSession is not null)
+        {
+            await work(CurrentSession).ConfigureAwait(false);
+            return;
+        }
+
+        using var session = await Client.StartSessionAsync(cancellationToken: ct).ConfigureAwait(false);
+        await session.WithTransactionAsync(async (s, _) =>
+        {
+            CurrentSession = s;
+            try
+            {
+                await work(s).ConfigureAwait(false);
             }
             finally
             {

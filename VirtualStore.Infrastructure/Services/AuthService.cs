@@ -35,19 +35,22 @@ public class AuthService : IAuthService
     private readonly IEmailService _emailService;
     private readonly IDistributedCache _cache;
     private readonly JwtSettings _jwtSettings;
+    private readonly IDateTimeProvider _clock;
 
     public AuthService(
         IRepository<User> userRepository,
         ITokenService tokenService,
         IEmailService emailService,
         IDistributedCache cache,
-        IOptions<JwtSettings> jwtSettings)
+        IOptions<JwtSettings> jwtSettings,
+        IDateTimeProvider? clock = null)
     {
         _userRepository = userRepository;
         _tokenService = tokenService;
         _emailService = emailService;
         _cache = cache;
         _jwtSettings = jwtSettings.Value;
+        _clock = clock ?? new SystemDateTimeProvider();
     }
 
     public async Task<TokenResponse> LoginAsync(LoginRequest request, string ipAddress)
@@ -57,20 +60,20 @@ public class AuthService : IAuthService
             throw new UnauthorizedAccessException("Invalid credentials");
 
         // Expired lockouts clear silently; active lockouts reject before password work.
-        if (user.LockoutEnd != null && user.LockoutEnd <= DateTime.UtcNow)
+        if (user.LockoutEnd != null && user.LockoutEnd <= _clock.UtcNow)
         {
             user.LockoutEnd = null;
             user.FailedAccessCount = 0;
         }
 
-        if (user.LockoutEnd != null && user.LockoutEnd > DateTime.UtcNow)
+        if (user.LockoutEnd != null && user.LockoutEnd > _clock.UtcNow)
             throw new AccountLockedException("Account is locked due to too many failed login attempts.");
 
         if (!VerifyPassword(request.Password, user.PasswordHash))
         {
             user.FailedAccessCount++;
             if (user.FailedAccessCount >= MaxFailedAccessAttempts)
-                user.LockoutEnd = DateTime.UtcNow.Add(LockoutDuration);
+                user.LockoutEnd = _clock.UtcNow.Add(LockoutDuration);
             await _userRepository.UpdateAsync(user.Id, user);
             throw new UnauthorizedAccessException("Invalid credentials");
         }
@@ -102,13 +105,13 @@ public class AuthService : IAuthService
         var refreshTokenEntity = new RefreshToken
         {
             Token = refreshToken,
-            Expires = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationDays),
-            Created = DateTime.UtcNow,
+            Expires = _clock.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationDays),
+            Created = _clock.UtcNow,
             CreatedByIp = ipAddress
         };
         user.RefreshTokens.Add(refreshTokenEntity);
         EnforceActiveTokenCap(user, refreshTokenEntity.Token, ipAddress);
-        user.LastLoginAt = DateTime.UtcNow;
+        user.LastLoginAt = _clock.UtcNow;
         user.FailedAccessCount = 0;
         user.LockoutEnd = null;
         await _userRepository.UpdateAsync(user.Id, user);
@@ -136,7 +139,7 @@ public class AuthService : IAuthService
         {
             foreach (var activeToken in user.RefreshTokens.Where(rt => rt.IsActive))
             {
-                activeToken.Revoked = DateTime.UtcNow;
+                activeToken.Revoked = _clock.UtcNow;
                 activeToken.RevokedByIp = ipAddress;
             }
             await _userRepository.UpdateAsync(user.Id, user);
@@ -148,15 +151,15 @@ public class AuthService : IAuthService
 
         // Rotation: revoke old and issue new. Old token points forward to its replacement.
         var newRefreshToken = _tokenService.GenerateRefreshToken();
-        refreshToken.Revoked = DateTime.UtcNow;
+        refreshToken.Revoked = _clock.UtcNow;
         refreshToken.RevokedByIp = ipAddress;
         refreshToken.ReplacedByToken = newRefreshToken;
 
         var newRefreshTokenEntity = new RefreshToken
         {
             Token = newRefreshToken,
-            Expires = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationDays),
-            Created = DateTime.UtcNow,
+            Expires = _clock.UtcNow.AddDays(_jwtSettings.RefreshTokenExpirationDays),
+            Created = _clock.UtcNow,
             CreatedByIp = ipAddress
         };
         user.RefreshTokens.Add(newRefreshTokenEntity);
@@ -177,7 +180,7 @@ public class AuthService : IAuthService
         if (user == null) return;
 
         var refreshToken = user.RefreshTokens.Single(rt => rt.Token == token);
-        refreshToken.Revoked = DateTime.UtcNow;
+        refreshToken.Revoked = _clock.UtcNow;
         refreshToken.RevokedByIp = ipAddress;
         await _userRepository.UpdateAsync(user.Id, user);
     }
@@ -273,9 +276,9 @@ public class AuthService : IAuthService
             Encoding.UTF8.GetBytes(a),
             Encoding.UTF8.GetBytes(b));
 
-    private static void RevokeAllRefreshTokens(User user, string ipAddress)
+    private void RevokeAllRefreshTokens(User user, string ipAddress)
     {
-        var now = DateTime.UtcNow;
+        var now = _clock.UtcNow;
         foreach (var rt in user.RefreshTokens.Where(rt => rt.Revoked == null))
         {
             rt.Revoked = now;
@@ -290,7 +293,7 @@ public class AuthService : IAuthService
     /// the document for the 90-day forensics window (see
     /// <c>RefreshTokenCleanupJob</c>).
     /// </summary>
-    private static void EnforceActiveTokenCap(User user, string newToken, string ipAddress)
+    private void EnforceActiveTokenCap(User user, string newToken, string ipAddress)
     {
         var active = user.RefreshTokens
             .Where(rt => rt.IsActive)
@@ -300,7 +303,7 @@ public class AuthService : IAuthService
         if (excess <= 0)
             return;
 
-        var now = DateTime.UtcNow;
+        var now = _clock.UtcNow;
         foreach (var oldest in active.Take(excess))
         {
             oldest.Revoked = now;
