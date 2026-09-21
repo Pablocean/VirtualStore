@@ -184,4 +184,168 @@ Content-Type: application/json
   "newPassword": "BrandNew123"
 }
 
+### Login (200 TokenResponse + refreshToken cookie; 2FA accounts get requiresTwoFactor:true first)
+POST {{VirtualStore.API_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@virtualstore.example",
+  "password": "Admin123!"
+}
+
+### Login second step for 2FA accounts (same credentials + 6-digit OTP from email)
+POST {{VirtualStore.API_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@virtualstore.example",
+  "password": "Admin123!",
+  "otpCode": "123456"
+}
+
+### Refresh token (reads refreshToken cookie; rotates it; reuse of old token -> 401 + all revoked)
+POST {{VirtualStore.API_HostAddress}}/api/auth/refresh-token
+Authorization: Bearer {{token}}
+
+### Logout (requires BOTH Bearer token and refreshToken cookie; clears the cookie)
+POST {{VirtualStore.API_HostAddress}}/api/auth/logout
+Authorization: Bearer {{token}}
+
+### List users, paged (Admin only)
+GET {{VirtualStore.API_HostAddress}}/api/users?search=&pageNumber=1&pageSize=20
+Authorization: Bearer {{adminToken}}
+
+### Create a user (Admin only -> 200, not 201; roles non-empty, password >=8 + upper/lower/digit)
+POST {{VirtualStore.API_HostAddress}}/api/users
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{
+  "email": "staff@virtualstore.example",
+  "username": "staff01",
+  "password": "Staff1234",
+  "firstName": "Sam",
+  "roles": ["Manager"]
+}
+
+### Update a user (Admin only; all-optional)
+PUT {{VirtualStore.API_HostAddress}}/api/users/USER_ID_HERE
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{
+  "twoFactorEnabled": true
+}
+
+### Soft-delete a user (Admin only -> 204; GDPR erasure is POST /api/me/purge instead)
+DELETE {{VirtualStore.API_HostAddress}}/api/users/USER_ID_HERE
+Authorization: Bearer {{adminToken}}
+
+### Export own data (any authenticated role; no secrets in the payload)
+GET {{VirtualStore.API_HostAddress}}/api/me/export
+Authorization: Bearer {{token}}
+
+### GDPR purge/erase own account (current password required -> 200 counts; wrong password -> 401)
+POST {{VirtualStore.API_HostAddress}}/api/me/purge
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "confirmPassword": "Staff1234"
+}
+
+### List products, paged (anonymous; isActive defaults to true — omit for all)
+GET {{VirtualStore.API_HostAddress}}/api/products?search=&minPrice=&maxPrice=&isActive=true&pageNumber=1&pageSize=20
+Accept: application/json
+
+### Get product by id (unknown id -> empty 404)
+GET {{VirtualStore.API_HostAddress}}/api/products/PRODUCT_ID_HERE
+Accept: application/json
+
+### Create a product (Admin/Manager -> 201 + Location; single imageUrl)
+POST {{VirtualStore.API_HostAddress}}/api/products
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{
+  "name": "Demo Widget",
+  "description": "A demo product.",
+  "price": 19.99,
+  "currency": "usd",
+  "stockQuantity": 50,
+  "imageUrl": "https://example.com/img/widget.png",
+  "categoryId": "CATEGORY_ID_HERE",
+  "tags": ["demo"]
+}
+
+### Update a product (Admin/Manager; all-optional incl. isActive)
+PUT {{VirtualStore.API_HostAddress}}/api/products/PRODUCT_ID_HERE
+Content-Type: application/json
+Authorization: Bearer {{adminToken}}
+
+{
+  "price": 17.99,
+  "stockQuantity": 60
+}
+
+### Delete a product (Admin only -> 204)
+DELETE {{VirtualStore.API_HostAddress}}/api/products/PRODUCT_ID_HERE
+Authorization: Bearer {{adminToken}}
+
+### Get cart (authenticated; identity from claims)
+GET {{VirtualStore.API_HostAddress}}/api/cart
+Authorization: Bearer {{token}}
+
+### Add item to cart (quantity 1-99, default 1)
+POST {{VirtualStore.API_HostAddress}}/api/cart/items
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "productId": "PRODUCT_ID_HERE",
+  "quantity": 2
+}
+
+### Update item quantity (raw JSON number body, NOT an object; clamp 1-99 client-side)
+PUT {{VirtualStore.API_HostAddress}}/api/cart/items/PRODUCT_ID_HERE
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+3
+
+### Remove item from cart
+DELETE {{VirtualStore.API_HostAddress}}/api/cart/items/PRODUCT_ID_HERE
+Authorization: Bearer {{token}}
+
+### Clear cart (-> 204)
+DELETE {{VirtualStore.API_HostAddress}}/api/cart
+Authorization: Bearer {{token}}
+
+### Create an order with Idempotency-Key header (header wins over body; replay -> 201 same order)
+POST {{VirtualStore.API_HostAddress}}/api/orders
+Content-Type: application/json
+Authorization: Bearer {{token}}
+Idempotency-Key: 11111111-2222-3333-4444-555555555555
+
+{
+  "items": [
+    { "productId": "PRODUCT_ID_HERE", "productName": "", "unitPrice": 0, "quantity": 1 }
+  ],
+  "shippingAddress": {
+    "street": "123 Main St",
+    "city": "Springfield",
+    "state": "IL",
+    "zipCode": "62701",
+    "country": "USA"
+  }
+}
+
+### Health readiness (anonymous, rate-limit exempt, includes MongoDB check)
+GET {{VirtualStore.API_HostAddress}}/health
+Accept: application/json
+
+### Health liveness (anonymous, always Healthy)
+GET {{VirtualStore.API_HostAddress}}/health/live
+Accept: application/json
+
 ###

@@ -45,4 +45,72 @@ jobs:
         run: dotnet test VirtualStore.slnx -c Release --no-build --verbosity normal --filter Category!=Integration
 
       - name: Test (full suite with coverage)
-        run: dotnet test VirtualStore.slnx -c Release --no-build --verbosity normal --collect:"XPlat Code Coverage"
+        run: dotnet test VirtualStore.slnx -c Release --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./TestResults
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-cobertura
+          path: TestResults/**/coverage.cobertura.xml
+
+      # Coverage gate (Wave T3): the full suite (unit + Docker-backed integration)
+      # must hold 100% line coverage on non-excluded code. The two test projects
+      # emit separate cobertura files, so this step unions them: a line counts as
+      # covered when ANY suite hits it. Exclusions: [ExcludeFromCodeCoverage]
+      # (honored by coverlet — covers Program.cs host bootstrapping) plus
+      # source-generated files (obj/*.generated.cs, e.g. the OpenAPI
+      # XmlCommentGenerator output) which no test can meaningfully execute.
+      # NOTE: OpenAPI diff check intentionally skipped — no checked-in
+      # openapi.json baseline exists to diff against.
+      - name: Coverage gate (100% line on non-excluded code)
+        run: |
+          python3 - <<'EOF'
+          import glob, sys, xml.etree.ElementTree as ET
+
+          files = glob.glob('TestResults/**/coverage.cobertura.xml', recursive=True)
+          assert files, 'no cobertura reports found under TestResults/'
+          print(f'merging {len(files)} cobertura report(s):')
+          for f in files:
+              print(f'  {f}')
+
+          def excluded(filename):
+              fn = filename.replace('\\', '/')
+              return '/obj/' in fn or fn.endswith('.generated.cs')
+
+          # (assembly, file, line) -> covered?
+          lines = {}
+          for f in files:
+              root = ET.parse(f).getroot()
+              for pkg in root.findall('packages/package'):
+                  asm = pkg.get('name')
+                  for cls in pkg.findall('classes/class'):
+                      fn = cls.get('filename')
+                      if excluded(fn):
+                          continue
+                      for ln in cls.find('lines').iter('line'):
+                          key = (asm, fn, ln.get('number'))
+                          hit = int(ln.get('hits', '0')) > 0
+                          lines[key] = lines.get(key, False) or hit
+
+          total = len(lines)
+          covered = sum(1 for v in lines.values() if v)
+          rate = (covered / total) if total else 1.0
+          print(f'overall line coverage (merged, non-excluded): {covered}/{total} = {rate:.4%}')
+
+          per_asm = {}
+          for (asm, fn, num), hit in lines.items():
+              t, c = per_asm.get(asm, (0, 0))
+              per_asm[asm] = (t + 1, c + (1 if hit else 0))
+          for asm in sorted(per_asm):
+              t, c = per_asm[asm]
+              print(f'  {asm}: {c}/{t} = {c/t:.2%}')
+
+          if rate < 1.0:
+              print('UNCOVERED LINES:')
+              for (asm, fn, num), hit in sorted(lines.items()):
+                  if not hit:
+                      print(f'  {asm} {fn}:{num}')
+              sys.exit(f'coverage gate FAILED: {rate:.4%} < 100% (non-excluded code)')
+          print('coverage gate PASSED: 100% line coverage on non-excluded code')
+          EOF
